@@ -69,6 +69,19 @@
         "A deterministic tie-break selects at most one candidate for promotion.",
         "The state store preserves candidate rankings and the promotion decision."
       ]
+    },
+    {
+      "id": "quality-aware-ranking",
+      "kind": "self-improvement",
+      "priority": 65,
+      "objective": "Rank eligible self-improvement candidates with deterministic Git change-surface evidence.",
+      "acceptance": [
+        "The controller measures committed changed files, insertions, deletions, and total changed lines against the claimed base.",
+        "All verification gates and non-regression requirements remain mandatory.",
+        "Eligible candidates rank by fewer changed lines, then fewer changed files, then ascending candidate ID.",
+        "SQLite verifies and preserves each quality vector, deterministic rank, and promotion decision.",
+        "Failure-injection tests prove metric tampering, unequal quality, and exact tie behavior."
+      ]
     }
   ]
 }

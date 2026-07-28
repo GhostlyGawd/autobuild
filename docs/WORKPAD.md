@@ -37,6 +37,7 @@
 - [x] Make malformed child output nonfatal and deterministic.
 - [x] Add a renewable controller ownership lease.
 - [x] Add bounded multi-candidate experiment ranking and promotion decisions.
+- [ ] Add deterministic Git change-surface quality evidence.
 
 ## Acceptance criteria
 
@@ -201,6 +202,16 @@ Alignment review for `ranked-self-improvement-experiments`:
   and writing-standard boundaries do not change.
 - Reviewed and unaffected: the lifecycle JSON schema still describes the same
   document structure. The instance changes only current behavior and evidence.
+
+Alignment review for the quality-aware desired-state addition:
+
+- `SPEC.json` now requests deterministic Git change-surface quality evidence.
+- This item is desired work. The implementation does not claim that it is
+  complete.
+- The existing Boolean gate score remains the documented current limitation.
+- Reviewed and unaffected: security, setup, adapter, controller, release,
+  writing-standard, visual, license, and provenance claims do not change at
+  this desired-state checkpoint.
 
 ## Implementation progress
 
@@ -470,8 +481,8 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: the controller promoted ranked self-improvement experiments. Primary
-review added hard resource ceilings and passed the complete gate set.
+Status: ranked experiments and hard resource ceilings are pushed. The
+quality-aware ranking item is ready.
 
-Next owner and action: commit and push the review follow-up. Then add a bounded
-quality-metric item and use it to dogfood the new multi-candidate path.
+Next owner and action: push this desired-state checkpoint, then run the first
+live multi-candidate reconciliation.
