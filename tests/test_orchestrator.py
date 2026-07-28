@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -197,7 +199,7 @@ def test_dispatch_stops_after_spec_change(
     outcome = orchestrator.reconcile_once()
 
     assert outcome.status == "stale"
-    assert outcome.detail == "desired state changed before dispatch"
+    assert outcome.detail == "authority lost: spec-digest-changed"
     assert outcome.worktree is None
 
 
@@ -223,8 +225,148 @@ def test_dispatch_stops_after_base_change(
     outcome = orchestrator.reconcile_once()
 
     assert outcome.status == "stale"
-    assert outcome.detail == "desired state changed before dispatch"
+    assert outcome.detail == "authority lost: base-commit-changed"
     assert outcome.worktree is None
+
+
+def test_active_agent_stops_after_spec_authority_loss(
+    git_repository: Path,
+) -> None:
+    started_marker = git_repository.parent / "agent-started"
+    evaluated_marker = git_repository.parent / "candidate-evaluated"
+    agent_code = (
+        "import time; "
+        "from pathlib import Path; "
+        f"Path({str(started_marker)!r}).write_text('started'); "
+        "time.sleep(5); "
+        "Path('candidate.txt').write_text('candidate\\n')"
+    )
+    gate_code = (
+        "from pathlib import Path; "
+        f"Path({str(evaluated_marker)!r}).write_text('evaluated')"
+    )
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(
+            git_repository,
+            gate_exit=0,
+            lease_seconds=2,
+            agent_code=agent_code,
+            gate_code=gate_code,
+        ),
+    )
+    base = current_commit(git_repository)
+    thread_errors: list[BaseException] = []
+
+    def change_spec_when_agent_starts() -> None:
+        try:
+            for _ in range(500):
+                if started_marker.exists():
+                    write_spec(git_repository, item_id="changed-task")
+                    return
+                time.sleep(0.01)
+            raise AssertionError("agent did not start")
+        except BaseException as error:
+            thread_errors.append(error)
+
+    changer = threading.Thread(target=change_spec_when_agent_starts, daemon=True)
+    changer.start()
+    started = time.monotonic()
+
+    outcome = orchestrator.reconcile_once()
+
+    changer.join(timeout=2)
+    assert not thread_errors
+    assert outcome.status == "stale"
+    assert outcome.detail == "authority lost: spec-digest-changed"
+    assert time.monotonic() - started < 4
+    assert current_commit(git_repository) == base
+    assert outcome.worktree is not None
+    assert not (outcome.worktree / "candidate.txt").exists()
+    assert not evaluated_marker.exists()
+    with sqlite3.connect(orchestrator.config.state_path) as connection:
+        event = connection.execute(
+            """
+            SELECT payload_json FROM events
+            WHERE run_id = ? AND kind = 'authority_lost'
+            """,
+            (outcome.run_id,),
+        ).fetchone()
+    assert event is not None
+    assert json.loads(event[0]) == {"cause": "spec-digest-changed"}
+
+
+def test_active_agent_stops_after_base_commit_authority_loss(
+    git_repository: Path,
+) -> None:
+    started_marker = git_repository.parent / "agent-started"
+    evaluated_marker = git_repository.parent / "candidate-evaluated"
+    agent_code = (
+        "import time; "
+        "from pathlib import Path; "
+        f"Path({str(started_marker)!r}).write_text('started'); "
+        "time.sleep(5); "
+        "Path('candidate.txt').write_text('candidate\\n')"
+    )
+    gate_code = (
+        "from pathlib import Path; "
+        f"Path({str(evaluated_marker)!r}).write_text('evaluated')"
+    )
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(
+            git_repository,
+            gate_exit=0,
+            lease_seconds=2,
+            agent_code=agent_code,
+            gate_code=gate_code,
+        ),
+    )
+    base = current_commit(git_repository)
+    thread_errors: list[BaseException] = []
+
+    def change_base_when_agent_starts() -> None:
+        try:
+            for _ in range(500):
+                if started_marker.exists():
+                    (git_repository / "concurrent.txt").write_text(
+                        "changed\n",
+                        encoding="utf-8",
+                    )
+                    git(git_repository, "add", "concurrent.txt")
+                    git(git_repository, "commit", "-m", "concurrent base change")
+                    return
+                time.sleep(0.01)
+            raise AssertionError("agent did not start")
+        except BaseException as error:
+            thread_errors.append(error)
+
+    changer = threading.Thread(target=change_base_when_agent_starts, daemon=True)
+    changer.start()
+    started = time.monotonic()
+
+    outcome = orchestrator.reconcile_once()
+
+    changer.join(timeout=2)
+    assert not thread_errors
+    assert outcome.status == "stale"
+    assert outcome.detail == "authority lost: base-commit-changed"
+    assert time.monotonic() - started < 4
+    assert current_commit(git_repository) != base
+    assert not (git_repository / "candidate.txt").exists()
+    assert outcome.worktree is not None
+    assert not (outcome.worktree / "candidate.txt").exists()
+    assert not evaluated_marker.exists()
+    with sqlite3.connect(orchestrator.config.state_path) as connection:
+        event = connection.execute(
+            """
+            SELECT payload_json FROM events
+            WHERE run_id = ? AND kind = 'authority_lost'
+            """,
+            (outcome.run_id,),
+        ).fetchone()
+    assert event is not None
+    assert json.loads(event[0]) == {"cause": "base-commit-changed"}
 
 
 def test_agent_startup_error_records_terminal_failure(git_repository: Path) -> None:

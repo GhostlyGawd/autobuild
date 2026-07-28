@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -8,7 +9,7 @@ from pathlib import Path
 import pytest
 
 import autobuild.state as state_module
-from autobuild.models import RunStatus, WorkItem, WorkKind
+from autobuild.models import AuthorityLossCause, RunStatus, WorkItem, WorkKind
 from autobuild.spec import Specification
 from autobuild.state import StaleLeaseError, StateStore
 
@@ -64,7 +65,10 @@ def test_stale_generation_cannot_transition(tmp_path: Path) -> None:
             RunStatus.LEASED,
             RunStatus.EXECUTING,
         )
+    with pytest.raises(StaleLeaseError) as error:
+        store.renew_lease(stale_claim, 60)
 
+    assert error.value.cause is AuthorityLossCause.LEASE_GENERATION_CHANGED
     assert store.status()["recent_runs"][0]["status"] == RunStatus.LEASED.value
 
 
@@ -87,6 +91,16 @@ def test_restart_expires_lease_and_uses_higher_generation(
     assert second.generation == first.generation + 1
     runs = store.status()["recent_runs"]
     assert {run["status"] for run in runs} == {"leased", "stale"}
+    with sqlite3.connect(store.path) as connection:
+        event = connection.execute(
+            """
+            SELECT payload_json FROM events
+            WHERE run_id = ? AND kind = 'authority_lost'
+            """,
+            (first.run_id,),
+        ).fetchone()
+    assert event is not None
+    assert json.loads(event[0]) == {"cause": "lease-expired"}
     with pytest.raises(StaleLeaseError):
         store.record_event(first, "late", {})
 
@@ -125,8 +139,10 @@ def test_expired_run_cannot_renew_lease(
     assert claim is not None
     clock += timedelta(seconds=2)
 
-    with pytest.raises(StaleLeaseError):
+    with pytest.raises(StaleLeaseError) as error:
         store.renew_lease(claim, 5)
+
+    assert error.value.cause is AuthorityLossCause.LEASE_EXPIRED
 
 
 def test_attempt_limit_marks_item_blocked(tmp_path: Path) -> None:

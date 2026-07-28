@@ -16,8 +16,11 @@ but the project is not production-ready.
 - Keeps execution state and evidence in SQLite.
 - Reconciles desired state instead of trusting a worker process.
 - Uses lease generations to reject stale worker events.
-- Renews active leases while an agent or verification gate runs.
-- Stops the child process if lease renewal loses authority.
+- Revalidates the full SPEC digest, base commit, lease generation, and lease
+  time at each active child-process heartbeat.
+- Renews the lease only while all heartbeat authority checks pass.
+- Stops the child process and records a bounded cause if heartbeat authority
+  is lost.
 - Runs agents in isolated Git worktrees.
 - Commits a candidate before it runs verification gates.
 - Runs verification gates without a command shell.
@@ -74,9 +77,13 @@ they must leave the candidate unchanged.
 
 Each work item has a SHA-256 digest of its canonical JSON object. The state
 store uses this digest to decide if an achieved item changed. A change to a
-different item does not reopen the achieved item. The controller also hashes
-the exact `SPEC.json` bytes. It uses that full digest with the base commit to
-stop an active run if any desired state changes.
+different item does not reopen the achieved item.
+
+The controller also hashes the exact `SPEC.json` bytes. It uses that full digest
+with the base commit to stop an active run if desired state or source authority
+changes. Each agent and gate heartbeat also checks the run generation and lease
+time. An authority loss makes the run stale before candidate evaluation or
+promotion can continue.
 
 ## Important limitations
 

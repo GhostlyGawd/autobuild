@@ -18,8 +18,11 @@ The controller applies these boundaries:
 - It commits the candidate before verification and rejects later gate changes.
 - It revalidates the SPEC digest and base commit before dispatch and promotion.
 - It rejects events that have an expired or stale lease generation.
-- It renews the lease during long agent and gate processes and stops the child
-  process if renewal loses authority.
+- It revalidates the full SPEC digest, base commit, lease generation, and lease
+  time during long agent and gate processes.
+- It renews the lease only while all heartbeat authority checks pass.
+- It stops the child process, makes the run stale, and records one bounded
+  authority-loss cause if a heartbeat check fails.
 - It uses fast-forward-only promotion.
 - It preserves failed worktrees for inspection.
 - It records an agent-startup or controller exception as a terminal failed run

@@ -42,19 +42,19 @@
       "resource": "Desired work",
       "owner": "SPEC.json at its observed full SHA-256 digest, with each item identified by its canonical SHA-256 digest",
       "failure_domain": "A worker can read but cannot redefine the requested outcome",
-      "authority_loss_behavior": "Stop dispatch or promotion and mark the run stale"
+      "authority_loss_behavior": "Stop an active child, dispatch, evaluation, or promotion and mark the run stale"
     },
     {
       "resource": "Execution lease and evidence",
       "owner": "SQLite state store",
       "failure_domain": "A process exit or worker message cannot directly set semantic success",
-      "authority_loss_behavior": "Reject the event unless the run id, generation, state, and lease are current"
+      "authority_loss_behavior": "Stop an active child and reject the event unless the run id, generation, state, and lease are current"
     },
     {
       "resource": "Source state and promotion",
       "owner": "Git base repository and reconciler",
       "failure_domain": "The agent owns edits only in its worktree",
-      "authority_loss_behavior": "Preserve the candidate and refuse non-fast-forward promotion"
+      "authority_loss_behavior": "Stop an active child, preserve the candidate, and refuse promotion after base movement"
     }
   ],
   "reconciliation": {
@@ -75,7 +75,7 @@
     ]
   },
   "retries_timeouts": {
-    "retry_policy": "The controller renews a current lease during long child processes; a failed or stale item returns to ready until its configured attempt limit is reached",
+    "retry_policy": "Each child heartbeat revalidates the full SPEC digest, base commit, lease generation, and lease time; the controller renews only current authority, and a failed or stale item returns to ready until its configured attempt limit is reached",
     "backoff": "The current local controller retries on a later explicit reconciliation cycle; time-based exponential backoff is not implemented",
     "attempt_limit": 5,
     "timeouts": [
@@ -85,7 +85,7 @@
     ]
   },
   "restart_stale_events": {
-    "restart_behavior": "Initialize the schema, expire old nonterminal leases, preserve their artifacts, and create a new generation only on a later claim; a child process stops if heartbeat renewal loses authority",
+    "restart_behavior": "Initialize the schema, expire old nonterminal leases, preserve their artifacts, and create a new generation only on a later claim; a child process stops if any heartbeat authority check fails",
     "fencing_token": "The pair of run id and monotonically increasing per-item generation, checked with lease expiration and expected state",
     "stale_event_disposition": "Reject the state change and retain the prior durable event history"
   },
@@ -190,11 +190,11 @@
       "owner": "Reconciler with a bounded agent child process",
       "entry": "Worktree creation succeeds and the current lease transitions from leased",
       "exit": "Agent failure goes to failed; agent success goes to evaluating",
-      "revalidation": "Validate the fenced transition before and after the child process",
-      "retry_timeout": "A heartbeat renews the lease; agent timeout or lost renewal stops the child and fails or stales the run",
+      "revalidation": "Each heartbeat and the child-completion boundary compare the full SPEC digest, base commit, generation, and lease time",
+      "retry_timeout": "A current heartbeat renews the lease; agent timeout or authority loss stops the child and fails or stales the run",
       "restart": "An expired lease makes the run stale; preserve the worktree",
       "disposal": "Preserve the worktree and bounded result summary",
-      "proof": "test_long_agent_renews_short_lease and test_process_stops_if_heartbeat_loses_authority"
+      "proof": "test_long_agent_renews_short_lease, test_active_agent_stops_after_spec_authority_loss, test_active_agent_stops_after_base_commit_authority_loss, and test_process_stops_if_heartbeat_loses_authority"
     },
     {
       "name": "evaluating",
@@ -202,11 +202,11 @@
       "owner": "Reconciler and configured gate runner",
       "entry": "The agent exits successfully under the current lease",
       "exit": "Any failed gate fails the run; all passed gates continue to fresh revalidation",
-      "revalidation": "Validate the lease for each recorded gate result",
-      "retry_timeout": "A heartbeat renews the lease; gate timeout or lost renewal stops the child and fails or stales the run",
+      "revalidation": "Each heartbeat and gate-completion boundary compare the full SPEC digest, base commit, generation, and lease time before recording a gate result",
+      "retry_timeout": "A current heartbeat renews the lease; gate timeout or authority loss stops the child and fails or stales the run",
       "restart": "An expired lease makes the run stale; preserve results",
       "disposal": "Preserve gate output in bounded event evidence",
-      "proof": "test_gate_failure_prevents_promotion"
+      "proof": "test_gate_failure_prevents_promotion, test_active_agent_stops_after_spec_authority_loss, and test_active_agent_stops_after_base_commit_authority_loss"
     },
     {
       "name": "promoting",
@@ -260,13 +260,13 @@
       "name": "stale",
       "classification": "execution",
       "owner": "SQLite state store after authority loss",
-      "entry": "The lease expires or fresh desired-state observation differs from the claim",
+      "entry": "The lease expires, the generation is not current, or a fresh SPEC or base-commit observation differs from the claim",
       "exit": "Terminal run; a later claim uses a higher generation",
       "revalidation": "Compare run id, generation, expected state, lease, SPEC digest, and base commit",
       "retry_timeout": "A later cycle can retry within the attempt limit",
       "restart": "Retain stale state and reject late events",
-      "disposal": "Preserve candidate and event history",
-      "proof": "test_stale_generation_cannot_transition"
+      "disposal": "Preserve candidate and bounded authority-loss event history",
+      "proof": "test_stale_generation_cannot_transition, test_restart_expires_lease_and_uses_higher_generation, test_active_agent_stops_after_spec_authority_loss, and test_active_agent_stops_after_base_commit_authority_loss"
     }
   ],
   "lifecycle_tests": [
@@ -325,6 +325,20 @@
       "failure_injection": "Desired state changes after the claim transaction",
       "expected_semantic_outcome": "No worktree or agent process is dispatched",
       "durable_evidence": "Stale run detail and dispatch test assertions"
+    },
+    {
+      "sequence": "start a long agent, change the full SPEC digest, and wait for its next heartbeat",
+      "transition": "executing to stale",
+      "failure_injection": "Change desired-state authority while the child is active",
+      "expected_semantic_outcome": "The child stops before candidate creation, evaluation, or promotion",
+      "durable_evidence": "Stale run, spec-digest-changed authority event, preserved worktree, and absence of evaluation"
+    },
+    {
+      "sequence": "start a long agent, advance the base commit, and wait for its next heartbeat",
+      "transition": "executing to stale",
+      "failure_injection": "Change source authority while the child is active",
+      "expected_semantic_outcome": "The child stops before candidate creation, evaluation, or promotion",
+      "durable_evidence": "Stale run, base-commit-changed authority event, preserved worktree, and absence of evaluation"
     },
     {
       "sequence": "promote a verified candidate, record success, then clean its worktree",

@@ -11,6 +11,11 @@ flowchart LR
     W --> A[Bounded agent process]
     A --> C[Candidate commit]
     C --> E[Verification gates]
+    A -. heartbeat .-> Q{SPEC, Git, generation,<br/>and lease current?}
+    E -. heartbeat .-> Q
+    Q -->|no: stop child| H
+    Q -. yes: continue .-> A
+    Q -. yes: continue .-> E
     E -->|all pass| V[Fresh SPEC and Git read]
     V -->|unchanged| P[Fast-forward promotion]
     V -->|changed| H[Preserved stale candidate]
@@ -56,10 +61,18 @@ achieved row only when its stored digest equals the current full specification
 digest. It then stores the canonical item digest without reopening the item. A
 simultaneous specification change causes conservative reopening.
 
-The controller renews the current lease while an agent or gate process runs.
-It stops the child process if renewal shows that the run lost authority. It
-also renews the lease at controller boundaries before it records evidence,
-commits a candidate, or changes execution state.
+Each agent and gate heartbeat reads the full `SPEC.json` digest and base Git
+commit. It also validates the stored run generation and lease time. The
+controller renews the lease only if all four authority checks pass. A failed
+check stops the child, makes the run stale, and records an `authority_lost`
+event with one bounded cause. The bounded causes are `spec-digest-changed`,
+`base-commit-changed`, `lease-generation-changed`, `lease-expired`, and
+`run-not-active`.
+
+The controller repeats the same authority revalidation at child completion and
+at controller boundaries before it records evidence, commits a candidate,
+starts evaluation, or promotes. Therefore, an authority loss during an agent
+or gate process cannot produce later candidate evaluation or promotion.
 
 The process runner resolves each configured executable to an explicit path
 before launch. This rule prevents Windows process creation from selecting a

@@ -33,7 +33,7 @@
 - [x] Run the first bounded self-improvement experiment.
 - [x] Add baseline and candidate gate vectors for self-improvement work.
 - [x] Bind achieved state to canonical work-item revisions.
-- [ ] Stop active children after desired-state or base-source authority loss.
+- [x] Stop active children after desired-state or base-source authority loss.
 - [ ] Add a renewable controller ownership lease.
 - [ ] Add richer quality metrics and multi-candidate experiment ranking.
 
@@ -59,7 +59,7 @@
 | SQLite owns leases and events | Required | `state.py` | State lifecycle tests | architecture | Proven for current local flow |
 | Generation fences stale events | Required | `state.py` | Stale and restart tests | lifecycle contract | Proven |
 | Fresh read before dispatch and promotion | Required | `orchestrator.py`, `gitops.py` | SPEC-change, base-change, and Git integration tests | architecture | Proven for tested local boundaries |
-| Active lease renewal and authority loss | Required | `process.py`, `state.py`, `orchestrator.py` | Heartbeat, renewal, and lost-authority tests | architecture, SECURITY | Proven |
+| Active lease renewal and authority loss | Required | `models.py`, `process.py`, `state.py`, `orchestrator.py` | Full heartbeat, renewal, expiry, generation, and source-change tests | README, architecture, SECURITY, lifecycle contract | Proven for agent and gate callback paths |
 | Shell-free gate execution | Required | `process.py` | Shell-injection negative | SECURITY | Proven |
 | Deterministic Python gate environment | Required | `process.py`, `orchestrator.py` | Candidate source and pytest-isolation test | README, architecture | Proven |
 | Secret containment and evidence redaction | Required | `process.py`, `orchestrator.py` | Environment and redaction negatives | SECURITY | Proven for configured and known forms |
@@ -121,13 +121,32 @@ Alignment review for the desired-state expansion:
 - Reviewed and unaffected: security, setup, release, writing-standard, visual,
   and provenance claims do not change at this desired-state checkpoint.
 
+Alignment review for `active-run-cancellation`:
+
+- Required conflict repaired: child-process heartbeats renewed the SQLite lease
+  without revalidating the full SPEC digest or base commit.
+- Implementation-defined omission repaired: authority loss now records an
+  `authority_lost` event with one cause from a bounded enumeration.
+- Required evidence added: active SPEC and base-commit failure injections stop
+  the agent before candidate creation, evaluation, or promotion.
+- Documentation-only drift repaired: README, security, architecture, lifecycle
+  contract, and execution-loop visual now describe all four heartbeat checks.
+- Reviewed and unaffected: `SPEC.json` already defines the exact outcome and
+  acceptance criteria, so its desired-state content does not change.
+- Reviewed and unaffected: setup commands, adapter configuration, secret
+  handling, cleanup, version, release, license, provenance, contribution, and
+  support surfaces do not change because the patch only narrows runtime
+  authority.
+
 ## Implementation progress
 
 The bootstrap reconciler provides a standard-library runtime and a Codex CLI
-adapter. The controller renews leases during long child processes, commits a
-candidate before evaluation, and rejects gate mutations. It cleans a verified
-successful worktree after all semantic checks pass. It preserves failed,
-stale, and manual-handoff worktrees.
+adapter. Each child-process heartbeat revalidates the full SPEC digest, base
+commit, lease generation, and lease time before it renews the lease. Authority
+loss stops the child, makes the run stale, and records a bounded cause. The
+controller commits only under current authority and rejects gate mutations. It
+cleans a verified successful worktree after all semantic checks pass. It
+preserves failed, stale, and manual-handoff worktrees.
 
 The first live product run found a Windows command-resolution defect. Python
 selected a restricted app-package executable instead of the npm command shim.
@@ -157,6 +176,10 @@ Evidence recorded on 2026-07-28:
 | Record process text | Known secret forms present | Redact values | Redacted text assertion | `test_redact_text_removes_environment_and_known_token_shapes` |
 | Run long agent | Agent exceeds original lease | Renew authority and succeed | SQLite lease and succeeded run | `test_long_agent_renews_short_lease` |
 | Run child process | Heartbeat loses authority | Stop child promptly | Exception and elapsed-time assertion | `test_process_stops_if_heartbeat_loses_authority` |
+| Run active agent | Full SPEC digest changes | Stop child before candidate evaluation or promotion | Stale run, bounded authority event, and preserved worktree | `test_active_agent_stops_after_spec_authority_loss` |
+| Run active agent | Base commit changes | Stop child before candidate evaluation or promotion | Stale run, bounded authority event, and preserved worktree | `test_active_agent_stops_after_base_commit_authority_loss` |
+| Renew active run | Generation differs | Reject heartbeat renewal | Typed bounded cause | `test_stale_generation_cannot_transition` |
+| Renew active run | Lease time expired | Reject heartbeat renewal and preserve cause | Typed event and stale run | `test_expired_run_cannot_renew_lease`, `test_restart_expires_lease_and_uses_higher_generation` |
 | Dispatch claimed item | SPEC changes after claim | Mark stale without worktree | SQLite stale run | `test_dispatch_stops_after_spec_change` |
 | Dispatch claimed item | Base commit changes after claim | Mark stale without worktree | SQLite stale run and Git commit | `test_dispatch_stops_after_base_change` |
 | Start agent process | Executable does not exist | Preserve worktree and record terminal failure | SQLite failed run | `test_agent_startup_error_records_terminal_failure` |
@@ -229,6 +252,27 @@ Canonical item-identity evidence recorded on 2026-07-28:
 - Live status synchronization replaced those legacy values with two different
   canonical item digests. Both items remained achieved.
 
+Active-run cancellation evidence recorded on 2026-07-28:
+
+- The worktree started from commit
+  `7aa640d174e072edcbffa5ab471beaf8fe790524`.
+- The focused process, state, and orchestrator suite passed 29 tests.
+- Both active source-authority failure injections passed three consecutive
+  focused repetitions.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=src python -m pytest -q`:
+  40 tests passed.
+- `python -m ruff check .`: passed.
+- `PYTHONPATH=src python -m autobuild writing-check`: no automated findings;
+  final status remained `NOT RELEASED — COMPLIANCE CHECK INCOMPLETE`.
+- `PYTHONPATH=src python -m autobuild validate --skip-git-clean`: configuration,
+  SPEC, executable, and Draft 2020-12 lifecycle-contract checks passed.
+- `PYTHONPATH=src python -m autobuild validate`: all semantic checks passed;
+  only the expected Git-clean check failed because this bounded worker must
+  leave its implementation changes uncommitted for controller evaluation.
+- Codeweb structural tools were unavailable because each local tool call was
+  cancelled. Direct diff review, lint, lifecycle schema validation, and the
+  complete test suite supplied the available local evidence.
+
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
 autoloading. A fresh project virtual environment remains the supported setup.
@@ -253,8 +297,8 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: canonical work-item identity is implemented and live state is migrated.
-Three new bounded outcomes are ready. The two earlier items remain achieved.
+Status: active-run cancellation is implemented and validated in the bounded
+worktree. The controller has not evaluated or promoted this candidate.
 
-Next owner and action: the autonomous orchestrator must push this desired-state
-checkpoint, then run `active-run-cancellation` through the reconciled loop.
+Next owner and action: the autonomous orchestrator must evaluate this preserved
+candidate under the current SPEC and base-commit authority before promotion.

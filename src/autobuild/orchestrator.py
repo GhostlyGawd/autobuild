@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from contextlib import suppress
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from .gitops import (
     is_clean,
     promote_fast_forward,
 )
-from .models import RunOutcome, RunStatus, WorkKind
+from .models import AuthorityLossCause, RunOutcome, RunStatus, WorkKind
 from .process import gate_environment, redact_text, run_gate, safe_environment
 from .spec import load_spec
 from .state import StaleLeaseError, StateStore
@@ -46,18 +47,25 @@ class Orchestrator:
         if claim is None:
             return RunOutcome(None, "idle", "no eligible work item")
 
-        current_spec = load_spec(self.root / "SPEC.json")
-        if (
-            current_spec.digest != claim.spec_digest
-            or current_commit(self.root) != claim.base_commit
-        ):
-            self.store.transition(
-                claim,
-                RunStatus.LEASED,
-                RunStatus.STALE,
-                detail="desired state changed before dispatch",
-            )
-            return RunOutcome(claim.run_id, "stale", "desired state changed before dispatch")
+        def source_authority_loss() -> AuthorityLossCause | None:
+            try:
+                observed_spec_digest = hashlib.sha256(
+                    (self.root / "SPEC.json").read_bytes()
+                ).hexdigest()
+            except OSError:
+                observed_spec_digest = None
+            observed_base_commit = current_commit(self.root)
+            if observed_spec_digest != claim.spec_digest:
+                return AuthorityLossCause.SPEC_DIGEST_CHANGED
+            if observed_base_commit != claim.base_commit:
+                return AuthorityLossCause.BASE_COMMIT_CHANGED
+            return None
+
+        authority_loss = source_authority_loss()
+        if authority_loss is not None:
+            self.store.expire_claim(claim, authority_loss)
+            detail = f"authority lost: {authority_loss.value}"
+            return RunOutcome(claim.run_id, "stale", detail)
 
         worktree = None
         execution_state = RunStatus.LEASED
@@ -67,8 +75,14 @@ class Orchestrator:
                 min(30.0, self.config.lease_seconds / 3),
             )
 
-            def renew_lease() -> None:
+            def revalidate_authority() -> None:
+                authority_loss = source_authority_loss()
                 self.store.renew_lease(claim, self.config.lease_seconds)
+                if authority_loss is not None:
+                    raise StaleLeaseError(
+                        f"run {claim.run_id} lost source authority",
+                        authority_loss,
+                    )
 
             baseline_results: dict[str, bool] = {}
             if claim.work_item.kind is WorkKind.SELF_IMPROVEMENT:
@@ -84,10 +98,10 @@ class Orchestrator:
                         gate,
                         self.root,
                         baseline_environment,
-                        heartbeat=renew_lease,
+                        heartbeat=revalidate_authority,
                         heartbeat_interval_seconds=heartbeat_interval,
                     )
-                    renew_lease()
+                    revalidate_authority()
                     baseline_results[gate.name] = baseline.passed
                     self.store.record_event(
                         claim,
@@ -130,12 +144,17 @@ class Orchestrator:
                 claim.work_item.id,
                 claim.base_commit,
             )
-            current_spec = load_spec(self.root / "SPEC.json")
-            if (
-                current_spec.digest != claim.spec_digest
-                or current_commit(self.root) != claim.base_commit
-                or not is_clean(self.root)
-            ):
+            authority_loss = source_authority_loss()
+            if authority_loss is not None:
+                self.store.expire_claim(claim, authority_loss)
+                detail = f"authority lost: {authority_loss.value}"
+                return RunOutcome(
+                    claim.run_id,
+                    "stale",
+                    detail,
+                    worktree.path,
+                )
+            if not is_clean(self.root):
                 self.store.transition(
                     claim,
                     RunStatus.LEASED,
@@ -168,10 +187,10 @@ class Orchestrator:
                 worktree.path,
                 self.config.result_root / f"{claim.run_id}.txt",
                 environment,
-                heartbeat=renew_lease,
+                heartbeat=revalidate_authority,
                 heartbeat_interval_seconds=heartbeat_interval,
             )
-            renew_lease()
+            revalidate_authority()
             self.store.record_event(
                 claim,
                 "agent_finished",
@@ -198,11 +217,11 @@ class Orchestrator:
                     worktree.path,
                 )
 
-            renew_lease()
+            revalidate_authority()
             candidate = commit_candidate(
                 worktree, f"autobuild: complete {claim.work_item.id}"
             )
-            renew_lease()
+            revalidate_authority()
             self.store.transition(claim, RunStatus.EXECUTING, RunStatus.EVALUATING)
             execution_state = RunStatus.EVALUATING
             evaluation_environment = gate_environment(environment, worktree.path)
@@ -212,10 +231,10 @@ class Orchestrator:
                     gate,
                     worktree.path,
                     evaluation_environment,
-                    heartbeat=renew_lease,
+                    heartbeat=revalidate_authority,
                     heartbeat_interval_seconds=heartbeat_interval,
                 )
-                renew_lease()
+                revalidate_authority()
                 self.store.record_event(
                     claim,
                     "gate_finished",
@@ -305,12 +324,17 @@ class Orchestrator:
                         "passing_gate_count_delta": passing_gate_count_delta,
                     },
                 )
-            current_spec = load_spec(self.root / "SPEC.json")
-            if (
-                current_spec.digest != claim.spec_digest
-                or current_commit(self.root) != claim.base_commit
-                or not is_clean(self.root)
-            ):
+            authority_loss = source_authority_loss()
+            if authority_loss is not None:
+                self.store.expire_claim(claim, authority_loss)
+                detail = f"authority lost: {authority_loss.value}"
+                return RunOutcome(
+                    claim.run_id,
+                    "stale",
+                    detail,
+                    worktree.path,
+                )
+            if not is_clean(self.root):
                 self.store.transition(
                     claim,
                     RunStatus.EVALUATING,
@@ -325,6 +349,7 @@ class Orchestrator:
                 )
             self.store.transition(claim, RunStatus.EVALUATING, RunStatus.PROMOTING)
             execution_state = RunStatus.PROMOTING
+            revalidate_authority()
             if not self.config.auto_promote:
                 self.store.transition(
                     claim,
@@ -374,11 +399,12 @@ class Orchestrator:
                 worktree.path,
             )
         except StaleLeaseError as error:
-            self.store.expire_claim(claim, f"lease lost: {error}")
+            self.store.expire_claim(claim, error.cause)
+            detail = f"authority lost: {error.cause.value}"
             return RunOutcome(
                 claim.run_id,
                 "stale",
-                f"lease lost: {error}",
+                detail,
                 worktree.path if worktree else None,
             )
         except GitError as error:

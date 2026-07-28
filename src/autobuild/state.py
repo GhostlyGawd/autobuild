@@ -10,12 +10,20 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .models import Claim, RunStatus, WorkItem, WorkKind
+from .models import AuthorityLossCause, Claim, RunStatus, WorkItem, WorkKind
 from .spec import Specification
 
 
 class StaleLeaseError(RuntimeError):
-    """A worker used a stale or invalid lease generation."""
+    """An active run lost desired-state, source, or lease authority."""
+
+    def __init__(
+        self,
+        message: str,
+        cause: AuthorityLossCause = AuthorityLossCause.RUN_NOT_ACTIVE,
+    ) -> None:
+        super().__init__(message)
+        self.cause = cause
 
 
 def _now() -> datetime:
@@ -168,6 +176,18 @@ class StateStore:
             connection.execute(
                 "INSERT INTO events(run_id, kind, payload_json, created_at) VALUES(?, ?, ?, ?)",
                 (row["id"], "lease_expired", "{}", now),
+            )
+            connection.execute(
+                "INSERT INTO events(run_id, kind, payload_json, created_at) VALUES(?, ?, ?, ?)",
+                (
+                    row["id"],
+                    "authority_lost",
+                    json.dumps(
+                        {"cause": AuthorityLossCause.LEASE_EXPIRED.value},
+                        sort_keys=True,
+                    ),
+                    now,
+                ),
             )
 
     def claim_next(
@@ -334,6 +354,33 @@ class StateStore:
         now = _timestamp(now_value)
         lease_expires_at = _timestamp(now_value + timedelta(seconds=lease_seconds))
         with self._connect() as connection:
+            current = connection.execute(
+                """
+                SELECT generation, status, lease_expires_at
+                FROM runs WHERE id = ?
+                """,
+                (claim.run_id,),
+            ).fetchone()
+            if current is None or current["generation"] != claim.generation:
+                raise StaleLeaseError(
+                    f"run {claim.run_id} generation {claim.generation} cannot renew",
+                    AuthorityLossCause.LEASE_GENERATION_CHANGED,
+                )
+            if current["lease_expires_at"] <= now:
+                raise StaleLeaseError(
+                    f"run {claim.run_id} generation {claim.generation} expired",
+                    AuthorityLossCause.LEASE_EXPIRED,
+                )
+            if current["status"] not in {
+                RunStatus.LEASED.value,
+                RunStatus.EXECUTING.value,
+                RunStatus.EVALUATING.value,
+                RunStatus.PROMOTING.value,
+            }:
+                raise StaleLeaseError(
+                    f"run {claim.run_id} generation {claim.generation} is not active",
+                    AuthorityLossCause.RUN_NOT_ACTIVE,
+                )
             cursor = connection.execute(
                 """
                 UPDATE runs
@@ -351,11 +398,17 @@ class StateStore:
             )
             if cursor.rowcount != 1:
                 raise StaleLeaseError(
-                    f"run {claim.run_id} generation {claim.generation} cannot renew"
+                    f"run {claim.run_id} generation {claim.generation} cannot renew",
+                    AuthorityLossCause.RUN_NOT_ACTIVE,
                 )
 
-    def expire_claim(self, claim: Claim, detail: str) -> bool:
+    def expire_claim(
+        self,
+        claim: Claim,
+        cause: AuthorityLossCause,
+    ) -> bool:
         now = _timestamp()
+        detail = f"authority lost: {cause.value}"
         with self._connect() as connection:
             cursor = connection.execute(
                 """
@@ -376,8 +429,8 @@ class StateStore:
                 "INSERT INTO events(run_id, kind, payload_json, created_at) VALUES(?, ?, ?, ?)",
                 (
                     claim.run_id,
-                    "lease_lost",
-                    json.dumps({"detail": detail}),
+                    "authority_lost",
+                    json.dumps({"cause": cause.value}, sort_keys=True),
                     now,
                 ),
             )

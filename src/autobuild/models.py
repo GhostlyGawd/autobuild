@@ -40,6 +40,14 @@ class RunStatus(StrEnum):
         }
 
 
+class AuthorityLossCause(StrEnum):
+    SPEC_DIGEST_CHANGED = "spec-digest-changed"
+    BASE_COMMIT_CHANGED = "base-commit-changed"
+    LEASE_GENERATION_CHANGED = "lease-generation-changed"
+    LEASE_EXPIRED = "lease-expired"
+    RUN_NOT_ACTIVE = "run-not-active"
+
+
 @dataclass(frozen=True)
 class WorkItem:
     id: str
