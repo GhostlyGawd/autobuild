@@ -7,6 +7,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from .models import ChangeSurface
+
 
 class GitError(RuntimeError):
     """A Git invariant or command failed."""
@@ -79,6 +81,57 @@ def commit_candidate(worktree: Worktree, message: str) -> str:
         _git(worktree.path, "add", "--all")
         _git(worktree.path, "commit", "-m", message)
     return current_commit(worktree.path)
+
+
+def measure_change_surface(
+    root: Path,
+    base_commit: str,
+    candidate_commit: str,
+) -> ChangeSurface:
+    ancestor = _git(
+        root,
+        "merge-base",
+        "--is-ancestor",
+        base_commit,
+        candidate_commit,
+        check=False,
+    )
+    if ancestor.returncode != 0:
+        raise GitError("candidate is not a descendant of the claimed base")
+    result = _git(
+        root,
+        "diff",
+        "--numstat",
+        "-z",
+        "--no-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+        base_commit,
+        candidate_commit,
+        "--",
+    )
+    changed_files = 0
+    insertions = 0
+    deletions = 0
+    for record in result.stdout.split("\0"):
+        if not record:
+            continue
+        fields = record.split("\t", 2)
+        if len(fields) != 3:
+            raise GitError("Git returned an invalid change-surface record")
+        added, deleted, _path = fields
+        try:
+            insertions += 0 if added == "-" else int(added)
+            deletions += 0 if deleted == "-" else int(deleted)
+        except ValueError as error:
+            raise GitError("Git returned an invalid change-surface count") from error
+        changed_files += 1
+    return ChangeSurface(
+        changed_files=changed_files,
+        insertions=insertions,
+        deletions=deletions,
+        changed_lines=insertions + deletions,
+    )
 
 
 def promote_fast_forward(root: Path, worktree: Worktree, expected_base: str) -> str:

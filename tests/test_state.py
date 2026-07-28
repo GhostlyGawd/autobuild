@@ -11,6 +11,7 @@ import pytest
 import autobuild.state as state_module
 from autobuild.models import (
     AuthorityLossCause,
+    ChangeSurface,
     ControllerLease,
     RunStatus,
     WorkItem,
@@ -135,10 +136,120 @@ def test_stale_generation_cannot_change_experiment_evidence(
             all_pass=True,
             non_regressing=True,
             eligible=True,
+            quality=ChangeSurface(1, 1, 0, 1),
             controller_lease=controller,
         )
 
     assert store.status()["candidate_rankings"] == []
+
+
+def test_sqlite_rejects_quality_metric_tampering(tmp_path: Path) -> None:
+    store, controller = owned_store(tmp_path)
+    desired = specification(("task", 1))
+    store.sync_spec(desired, controller_lease=controller)
+    claim = store.claim_next(
+        desired, "base", 60, 3, controller_lease=controller
+    )
+    assert claim is not None
+    store.transition(
+        claim,
+        RunStatus.LEASED,
+        RunStatus.EXECUTING,
+        controller_lease=controller,
+    )
+
+    with pytest.raises(ValueError, match="quality vector is invalid"):
+        store.record_experiment_candidate(
+            claim,
+            candidate_id="candidate-001",
+            ordinal=1,
+            worktree=tmp_path / "candidate",
+            candidate_commit="candidate",
+            status="evaluated",
+            classification="non-regression",
+            gate_results={"test": True},
+            score=1,
+            all_pass=True,
+            non_regressing=True,
+            eligible=True,
+            quality=ChangeSurface(1, 1, 0, 2),
+            controller_lease=controller,
+        )
+
+    store.record_experiment_candidate(
+        claim,
+        candidate_id="candidate-001",
+        ordinal=1,
+        worktree=tmp_path / "candidate",
+        candidate_commit="candidate",
+        status="evaluated",
+        classification="non-regression",
+        gate_results={"test": True},
+        score=1,
+        all_pass=True,
+        non_regressing=True,
+        eligible=True,
+        quality=ChangeSurface(1, 1, 0, 1),
+        controller_lease=controller,
+    )
+    store.record_experiment_candidate(
+        claim,
+        candidate_id="candidate-002",
+        ordinal=2,
+        worktree=tmp_path / "candidate-002",
+        candidate_commit="candidate-002",
+        status="evaluated",
+        classification="non-regression",
+        gate_results={"test": True},
+        score=1,
+        all_pass=True,
+        non_regressing=True,
+        eligible=True,
+        quality=ChangeSurface(1, 2, 0, 2),
+        controller_lease=controller,
+    )
+    store.transition(
+        claim,
+        RunStatus.EXECUTING,
+        RunStatus.EVALUATING,
+        controller_lease=controller,
+    )
+    with pytest.raises(ValueError, match="ranking is not deterministic"):
+        store.record_experiment_ranking(
+            claim,
+            ["candidate-002", "candidate-001"],
+            "candidate-002",
+            controller_lease=controller,
+        )
+    store.record_experiment_ranking(
+        claim,
+        ["candidate-001", "candidate-002"],
+        "candidate-001",
+        controller_lease=controller,
+    )
+    connection = sqlite3.connect(store.path)
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            """
+            UPDATE experiment_quality
+            SET changed_files = 2
+            WHERE run_id = ? AND candidate_id = 'candidate-001'
+            """,
+            (claim.run_id,),
+        )
+    connection.close()
+
+    candidate = next(
+        row
+        for row in store.status()["candidate_rankings"]
+        if row["candidate_id"] == "candidate-001"
+    )
+    assert (
+        candidate["changed_files"],
+        candidate["insertions"],
+        candidate["deletions"],
+        candidate["changed_lines"],
+    ) == (1, 1, 0, 1)
 
 
 def test_restart_expires_lease_and_uses_higher_generation(

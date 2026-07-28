@@ -77,6 +77,14 @@ class ControllerLease:
 
 
 @dataclass(frozen=True)
+class ChangeSurface:
+    changed_files: int
+    insertions: int
+    deletions: int
+    changed_lines: int
+
+
+@dataclass(frozen=True)
 class Gate:
     name: str
     command: tuple[str, ...]

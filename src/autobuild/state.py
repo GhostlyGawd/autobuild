@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .models import (
     AuthorityLossCause,
+    ChangeSurface,
     Claim,
     ControllerLease,
     RunStatus,
@@ -155,12 +156,36 @@ class StateStore:
                     promoted_commit TEXT,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS experiment_quality (
+                    run_id TEXT NOT NULL,
+                    candidate_id TEXT NOT NULL,
+                    changed_files INTEGER NOT NULL CHECK (changed_files >= 0),
+                    insertions INTEGER NOT NULL CHECK (insertions >= 0),
+                    deletions INTEGER NOT NULL CHECK (deletions >= 0),
+                    changed_lines INTEGER NOT NULL CHECK (
+                        changed_lines >= 0
+                        AND changed_lines = insertions + deletions
+                    ),
+                    PRIMARY KEY (run_id, candidate_id),
+                    FOREIGN KEY (run_id, candidate_id)
+                        REFERENCES experiment_candidates(run_id, candidate_id)
+                );
                 CREATE INDEX IF NOT EXISTS runs_item_status
                     ON runs(work_item_id, status);
                 CREATE INDEX IF NOT EXISTS experiment_candidates_rank
                     ON experiment_candidates(run_id, rank);
                 CREATE UNIQUE INDEX IF NOT EXISTS experiment_candidates_one_selected
                     ON experiment_candidates(run_id) WHERE selected = 1;
+                CREATE TRIGGER IF NOT EXISTS experiment_quality_no_update
+                BEFORE UPDATE ON experiment_quality
+                BEGIN
+                    SELECT RAISE(ABORT, 'experiment quality is immutable');
+                END;
+                CREATE TRIGGER IF NOT EXISTS experiment_quality_no_delete
+                BEFORE DELETE ON experiment_quality
+                BEGIN
+                    SELECT RAISE(ABORT, 'experiment quality is immutable');
+                END;
                 """
             )
 
@@ -814,6 +839,7 @@ class StateStore:
         all_pass: bool,
         non_regressing: bool,
         eligible: bool,
+        quality: ChangeSurface | None,
         controller_lease: ControllerLease,
     ) -> None:
         expected_score = sum(result is True for result in gate_results.values())
@@ -822,10 +848,26 @@ class StateStore:
         )
         if score != expected_score or all_pass != expected_all_pass:
             raise ValueError("experiment score does not match its gate results")
+        if quality is not None and (
+            min(
+                quality.changed_files,
+                quality.insertions,
+                quality.deletions,
+                quality.changed_lines,
+            )
+            < 0
+            or quality.changed_lines != quality.insertions + quality.deletions
+        ):
+            raise ValueError("experiment quality vector is invalid")
+        if quality is not None and candidate_commit is None:
+            raise ValueError("experiment quality requires a candidate commit")
+        if status == "evaluated" and quality is None:
+            raise ValueError("evaluated experiment requires a quality vector")
         if eligible and not (
             all_pass
             and non_regressing
             and candidate_commit
+            and quality is not None
             and status == "evaluated"
             and classification in {"improvement", "non-regression"}
         ):
@@ -846,6 +888,20 @@ class StateStore:
                 raise StaleLeaseError(
                     f"run {claim.run_id} generation {claim.generation} is not current"
                 )
+            existing = connection.execute(
+                """
+                SELECT candidate_commit
+                FROM experiment_candidates
+                WHERE run_id = ? AND candidate_id = ?
+                """,
+                (claim.run_id, candidate_id),
+            ).fetchone()
+            if (
+                existing is not None
+                and existing["candidate_commit"] is not None
+                and existing["candidate_commit"] != candidate_commit
+            ):
+                raise ValueError("experiment candidate commit is immutable")
             connection.execute(
                 """
                 INSERT INTO experiment_candidates(
@@ -882,6 +938,39 @@ class StateStore:
                     now,
                 ),
             )
+            stored_quality = connection.execute(
+                """
+                SELECT changed_files, insertions, deletions, changed_lines
+                FROM experiment_quality
+                WHERE run_id = ? AND candidate_id = ?
+                """,
+                (claim.run_id, candidate_id),
+            ).fetchone()
+            if stored_quality is not None and quality is None:
+                raise ValueError("experiment quality vector is immutable")
+            if quality is not None:
+                quality_values = (
+                    quality.changed_files,
+                    quality.insertions,
+                    quality.deletions,
+                    quality.changed_lines,
+                )
+                if stored_quality is None:
+                    connection.execute(
+                        """
+                        INSERT INTO experiment_quality(
+                            run_id, candidate_id, changed_files, insertions,
+                            deletions, changed_lines
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            claim.run_id,
+                            candidate_id,
+                            *quality_values,
+                        ),
+                    )
+                elif tuple(stored_quality) != quality_values:
+                    raise ValueError("experiment quality vector is immutable")
             connection.execute(
                 "INSERT INTO events(run_id, kind, payload_json, created_at) VALUES(?, ?, ?, ?)",
                 (
@@ -928,9 +1017,15 @@ class StateStore:
                 row["candidate_id"]: row
                 for row in connection.execute(
                     """
-                    SELECT candidate_id, candidate_commit, eligible, score
-                    FROM experiment_candidates
-                    WHERE run_id = ?
+                    SELECT candidate.candidate_id, candidate.candidate_commit,
+                           candidate.eligible, candidate.score,
+                           quality.changed_files, quality.insertions,
+                           quality.deletions, quality.changed_lines
+                    FROM experiment_candidates AS candidate
+                    LEFT JOIN experiment_quality AS quality
+                      ON quality.run_id = candidate.run_id
+                     AND quality.candidate_id = candidate.candidate_id
+                    WHERE candidate.run_id = ?
                     """,
                     (claim.run_id,),
                 )
@@ -943,7 +1038,11 @@ class StateStore:
             expected_ranking = sorted(
                 stored,
                 key=lambda candidate_id: (
-                    -stored[candidate_id]["score"],
+                    not stored[candidate_id]["eligible"],
+                    stored[candidate_id]["changed_lines"] is None,
+                    stored[candidate_id]["changed_lines"] or 0,
+                    stored[candidate_id]["changed_files"] is None,
+                    stored[candidate_id]["changed_files"] or 0,
                     candidate_id,
                 ),
             )
@@ -1035,6 +1134,10 @@ class StateStore:
         controller_lease: ControllerLease,
         promoted_commit: str | None = None,
     ) -> None:
+        if decision not in {"awaiting-promotion", "promoted"}:
+            raise ValueError("promotion decision is invalid")
+        if (decision == "promoted") != (promoted_commit is not None):
+            raise ValueError("promotion decision does not match the promoted commit")
         now = _timestamp()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -1051,6 +1154,25 @@ class StateStore:
                 raise StaleLeaseError(
                     f"run {claim.run_id} generation {claim.generation} is not current"
                 )
+            selected = connection.execute(
+                """
+                SELECT decision.candidate_commit, candidate.selected,
+                       quality.changed_lines
+                FROM promotion_decisions AS decision
+                JOIN experiment_candidates AS candidate
+                  ON candidate.run_id = decision.run_id
+                 AND candidate.candidate_id = decision.candidate_id
+                JOIN experiment_quality AS quality
+                  ON quality.run_id = candidate.run_id
+                 AND quality.candidate_id = candidate.candidate_id
+                WHERE decision.run_id = ?
+                """,
+                (claim.run_id,),
+            ).fetchone()
+            if selected is None or not selected["selected"]:
+                raise ValueError("promotion decision has no selected quality vector")
+            if promoted_commit is not None and promoted_commit != selected["candidate_commit"]:
+                raise ValueError("promoted commit does not match the selected candidate")
             cursor = connection.execute(
                 """
                 UPDATE promotion_decisions
@@ -1135,13 +1257,22 @@ class StateStore:
                     }
                     for row in connection.execute(
                         """
-                        SELECT run_id, candidate_id, ordinal, worktree,
-                               base_commit, candidate_commit, status,
-                               classification, gate_results_json, score,
-                               all_pass, non_regressing, eligible, rank,
-                               selected, updated_at
-                        FROM experiment_candidates
-                        ORDER BY updated_at DESC, run_id, rank, ordinal
+                        SELECT candidate.run_id, candidate.candidate_id,
+                               candidate.ordinal, candidate.worktree,
+                               candidate.base_commit, candidate.candidate_commit,
+                               candidate.status, candidate.classification,
+                               candidate.gate_results_json, candidate.score,
+                               candidate.all_pass, candidate.non_regressing,
+                               candidate.eligible, candidate.rank,
+                               candidate.selected, quality.changed_files,
+                               quality.insertions, quality.deletions,
+                               quality.changed_lines, candidate.updated_at
+                        FROM experiment_candidates AS candidate
+                        LEFT JOIN experiment_quality AS quality
+                          ON quality.run_id = candidate.run_id
+                         AND quality.candidate_id = candidate.candidate_id
+                        ORDER BY candidate.updated_at DESC, candidate.run_id,
+                                 candidate.rank, candidate.ordinal
                         LIMIT 100
                         """
                     )

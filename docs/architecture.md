@@ -16,7 +16,7 @@ flowchart LR
     Q -->|no: stop child| H
     Q -. yes: continue .-> A
     Q -. yes: continue .-> E
-    E --> K[Deterministic score and ranking]
+    E --> K[Committed Git change surface<br/>and deterministic ranking]
     K -->|one eligible winner| V[Fresh SPEC and Git read]
     K -->|no eligible winner| F
     V -->|unchanged| P[Fast-forward promotion]
@@ -118,20 +118,33 @@ seconds.
 
 The controller runs all gates against the base before dispatch. It then runs
 all configured gates for each candidate while its process-time budget remains.
-The deterministic score is the number of passed gates. An eligible candidate
-has a successful agent and all gates pass. No gate can regress from the
-baseline. The gates must leave the committed candidate unchanged.
+An eligible candidate has a successful agent and all gates pass. No gate can
+regress from the baseline. The gates must leave the committed candidate
+unchanged.
 
-The controller orders candidates by descending score and then by ascending
-candidate ID. It selects the first eligible candidate. This tie-break selects
-at most one candidate. If no candidate is eligible, the run fails without
+After the gates, the controller measures each committed candidate against the
+claimed base with Git `--numstat`. The quality vector contains changed files,
+insertions, deletions, and changed lines. Changed lines equal insertions plus
+deletions. Rename detection is disabled, so a rename is one deleted path and
+one added path. A binary path contributes one changed file and zero changed
+lines because Git does not provide binary line counts.
+
+The controller orders eligible candidates before ineligible candidates. Within
+each group, it orders candidates by fewer changed lines, fewer changed files,
+and ascending candidate ID. A candidate without a committed quality vector
+follows candidates that have vectors. The controller selects only the first
+eligible candidate. If no candidate is eligible, the run fails without
 promotion.
 
 SQLite stores each candidate ID, ordinal, worktree, base commit, candidate
-commit, gate vector, classification, score, eligibility, rank, and selection.
-It also stores the selected, awaiting, promoted, or no-eligible-candidate
-promotion decision. The store recomputes the score and verifies the ranking
-before it accepts a winner. The JSON status output includes these records.
+commit, gate vector, classification, gate-pass score, eligibility, rank, and
+selection. A constrained quality table stores each committed change-surface
+vector and requires nonnegative counts with changed lines equal to insertions
+plus deletions. SQLite triggers reject later updates or deletion of a stored
+quality vector. SQLite recomputes the permitted rank and winner before it
+stores the promotion decision. A later awaiting or promoted decision must still
+refer to the selected candidate, quality vector, and candidate commit. The
+JSON status output includes these records.
 
 ## Recovery
 
@@ -167,5 +180,5 @@ not discard the handoff evidence.
 - Promotion does not create pull requests or push changes.
 - The controller does not clean failed, stale, blocked, or manual-handoff
   worktrees.
-- Self-improvement ranking uses Boolean gate-pass scores. It does not use
-  richer quality or performance metrics.
+- Self-improvement ranking uses Git file and line counts. It does not measure
+  performance, maintainability, semantic value, or binary line size.

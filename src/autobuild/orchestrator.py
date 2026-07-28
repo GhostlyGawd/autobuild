@@ -20,10 +20,12 @@ from .gitops import (
     current_commit,
     has_changes,
     is_clean,
+    measure_change_surface,
     promote_fast_forward,
 )
 from .models import (
     AuthorityLossCause,
+    ChangeSurface,
     ControllerLease,
     RunOutcome,
     RunStatus,
@@ -48,6 +50,7 @@ class _CandidateExperiment:
     non_regressing: bool = False
     eligible: bool = False
     classification: str = "pending"
+    quality: ChangeSurface | None = None
 
 
 class Orchestrator:
@@ -295,6 +298,7 @@ class Orchestrator:
                         all_pass=False,
                         non_regressing=False,
                         eligible=False,
+                        quality=None,
                         controller_lease=controller_lease,
                     )
                 agent_timeout = min(
@@ -364,6 +368,7 @@ class Orchestrator:
                             all_pass=False,
                             non_regressing=False,
                             eligible=False,
+                            quality=None,
                             controller_lease=controller_lease,
                         )
                         continue
@@ -526,6 +531,11 @@ class Orchestrator:
                     and experiment.all_pass
                     and experiment.non_regressing
                 )
+                experiment.quality = measure_change_surface(
+                    worktree.path,
+                    claim.base_commit,
+                    experiment.candidate_commit,
+                )
                 passing_gate_count_delta = experiment.score - sum(
                     baseline_results.values()
                 )
@@ -539,21 +549,6 @@ class Orchestrator:
                     experiment.classification = "non-regression"
                 else:
                     experiment.classification = "no-improvement"
-                self.store.record_event(
-                    claim,
-                    "self_improvement_evaluated",
-                    {
-                        "candidate_id": experiment.candidate_id,
-                        "classification": experiment.classification,
-                        "baseline_gates": baseline_results,
-                        "candidate_gates": experiment.gate_results,
-                        "gate_pass_deltas": gate_pass_deltas,
-                        "passing_gate_count_delta": passing_gate_count_delta,
-                        "score": experiment.score,
-                        "eligible": experiment.eligible,
-                    },
-                    controller_lease=controller_lease,
-                )
                 self.store.record_experiment_candidate(
                     claim,
                     candidate_id=experiment.candidate_id,
@@ -567,6 +562,28 @@ class Orchestrator:
                     all_pass=experiment.all_pass,
                     non_regressing=experiment.non_regressing,
                     eligible=experiment.eligible,
+                    quality=experiment.quality,
+                    controller_lease=controller_lease,
+                )
+                self.store.record_event(
+                    claim,
+                    "self_improvement_evaluated",
+                    {
+                        "candidate_id": experiment.candidate_id,
+                        "classification": experiment.classification,
+                        "baseline_gates": baseline_results,
+                        "candidate_gates": experiment.gate_results,
+                        "gate_pass_deltas": gate_pass_deltas,
+                        "passing_gate_count_delta": passing_gate_count_delta,
+                        "score": experiment.score,
+                        "eligible": experiment.eligible,
+                        "quality": {
+                            "changed_files": experiment.quality.changed_files,
+                            "insertions": experiment.quality.insertions,
+                            "deletions": experiment.quality.deletions,
+                            "changed_lines": experiment.quality.changed_lines,
+                        },
+                    },
                     controller_lease=controller_lease,
                 )
 
@@ -574,7 +591,15 @@ class Orchestrator:
                 ranked_candidates = sorted(
                     candidates,
                     key=lambda experiment: (
-                        -experiment.score,
+                        not experiment.eligible,
+                        experiment.quality is None,
+                        experiment.quality.changed_lines
+                        if experiment.quality is not None
+                        else 0,
+                        experiment.quality is None,
+                        experiment.quality.changed_files
+                        if experiment.quality is not None
+                        else 0,
                         experiment.candidate_id,
                     ),
                 )

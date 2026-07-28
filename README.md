@@ -41,10 +41,11 @@ but the project is not production-ready.
   combined agent-and-gate process-time budget for each candidate.
 - Starts each self-improvement candidate from the same base commit in a
   separate worktree.
-- Records baseline and candidate gate vectors, deterministic gate-pass scores,
-  rankings, and the promotion decision in SQLite.
-- Selects only an all-pass, non-regressing candidate. It resolves score ties by
-  ascending candidate ID and promotes at most one candidate.
+- Records baseline and candidate gate vectors, Git change-surface vectors,
+  deterministic ranks, and the promotion decision in SQLite.
+- Selects only an all-pass, non-regressing candidate. Eligible candidates rank
+  by fewer changed lines, fewer changed files, and ascending candidate ID.
+  The controller promotes at most one candidate.
 - Treats automated controlled-English checks as evidence, not as an
   ASD-STE100 compliance decision.
 
@@ -120,8 +121,10 @@ acquire a higher generation only after graceful release or lease expiry.
 - Sandbox strength depends on the configured agent and operating system.
 - The project does not yet provide remote scheduling, distributed leases,
   credential brokering, or automatic pull request creation.
-- Self-improvement scores use Boolean gate results. They do not measure
-  performance, maintainability, or other richer quality properties.
+- Self-improvement quality uses committed Git line and file counts. It does not
+  measure performance, maintainability, or semantic value. Git does not provide
+  line counts for binary changes, so a binary path contributes one changed file
+  and zero changed lines.
 - No license has been granted for this repository.
 
 ## Writing-standard boundary

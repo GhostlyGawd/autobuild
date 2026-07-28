@@ -22,7 +22,7 @@ from autobuild.config import (
     SelfImprovementConfig,
 )
 from autobuild.gitops import GitError, current_commit
-from autobuild.models import Gate
+from autobuild.models import ChangeSurface, Gate
 from autobuild.orchestrator import Orchestrator
 
 
@@ -583,6 +583,12 @@ def test_self_improvement_records_baseline_and_improvement(
         "eligible": True,
         "gate_pass_deltas": {"result": 1},
         "passing_gate_count_delta": 1,
+        "quality": {
+            "changed_files": 1,
+            "changed_lines": 1,
+            "deletions": 0,
+            "insertions": 1,
+        },
         "score": 1,
     }
 
@@ -619,6 +625,12 @@ def test_self_improvement_does_not_call_an_unchanged_failure_a_regression(
         "eligible": False,
         "gate_pass_deltas": {"result": 0},
         "passing_gate_count_delta": 0,
+        "quality": {
+            "changed_files": 1,
+            "changed_lines": 1,
+            "deletions": 0,
+            "insertions": 1,
+        },
         "score": 0,
     }
 
@@ -671,6 +683,15 @@ def test_self_improvement_ranks_candidates_and_promotes_deterministic_winner(
         ("candidate-002", 2, 1, True, False),
         ("candidate-003", 3, 0, False, False),
     ]
+    assert {
+        (
+            row["changed_files"],
+            row["insertions"],
+            row["deletions"],
+            row["changed_lines"],
+        )
+        for row in rankings
+    } == {(1, 1, 0, 1)}
     assert len({row["worktree"] for row in rankings}) == 3
     assert not Path(rankings[0]["worktree"]).exists()
     assert Path(rankings[1]["worktree"]).exists()
@@ -685,6 +706,83 @@ def test_self_improvement_ranks_candidates_and_promotes_deterministic_winner(
             "updated_at": state["promotion_decisions"][0]["updated_at"],
         }
     ]
+
+
+def test_self_improvement_ranks_unequal_quality_before_candidate_id(
+    git_repository: Path,
+) -> None:
+    write_spec(git_repository, kind="self-improvement")
+    git(git_repository, "add", "SPEC.json")
+    git(git_repository, "commit", "-m", "request quality-ranked self improvement")
+    agent_code = (
+        "from pathlib import Path; "
+        "candidate = Path.cwd().name.split('-', 1)[0]; "
+        "files = "
+        "{'001': {'large.txt': 'a\\nb\\nc\\n'}, "
+        "'002': {'first.txt': 'a\\n', 'second.txt': 'b\\n'}, "
+        "'003': {'small.txt': 'a\\nb\\n'}}[candidate]; "
+        "[Path(name).write_text(content) for name, content in files.items()]"
+    )
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(
+            git_repository,
+            gate_exit=0,
+            agent_code=agent_code,
+            max_candidates=3,
+        ),
+    )
+
+    outcome = orchestrator.reconcile_once()
+
+    assert outcome.status == "succeeded", outcome.detail
+    assert (git_repository / "small.txt").read_text(encoding="utf-8") == "a\nb\n"
+    rankings = sorted(
+        orchestrator.store.status()["candidate_rankings"],
+        key=lambda row: row["rank"],
+    )
+    assert [
+        (
+            row["candidate_id"],
+            row["changed_lines"],
+            row["changed_files"],
+            row["selected"],
+        )
+        for row in rankings
+    ] == [
+        ("candidate-003", 2, 1, True),
+        ("candidate-002", 2, 2, False),
+        ("candidate-001", 3, 1, False),
+    ]
+
+
+def test_quality_metric_tampering_prevents_ranking_and_promotion(
+    git_repository: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_spec(git_repository, kind="self-improvement")
+    git(git_repository, "add", "SPEC.json")
+    git(git_repository, "commit", "-m", "request measured self improvement")
+    monkeypatch.setattr(
+        orchestrator_module,
+        "measure_change_surface",
+        lambda *_arguments: ChangeSurface(1, 1, 0, 2),
+    )
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(git_repository, gate_exit=0),
+    )
+    base = current_commit(git_repository)
+
+    outcome = orchestrator.reconcile_once()
+
+    assert outcome.status == "failed"
+    assert "experiment quality vector is invalid" in outcome.detail
+    assert current_commit(git_repository) == base
+    state = orchestrator.store.status()
+    assert state["candidate_rankings"][0]["changed_lines"] is None
+    assert state["candidate_rankings"][0]["rank"] is None
+    assert state["promotion_decisions"] == []
 
 
 def test_self_improvement_candidate_timeout_prevents_promotion(

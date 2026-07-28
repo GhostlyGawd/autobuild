@@ -27,6 +27,10 @@ The controller applies these boundaries:
 - It rejects controller state mutations when the owner token, repository,
   generation, or lease time is not current.
 - It commits the candidate before verification and rejects later gate changes.
+- It measures committed candidate changes against the claimed base with Git.
+- It stores nonnegative file, insertion, deletion, and changed-line counts in
+  SQLite. SQLite requires changed lines to equal insertions plus deletions.
+- It uses SQLite triggers to reject later quality-vector updates or deletion.
 - It revalidates the SPEC digest and base commit before dispatch and promotion.
 - It rejects events that have an expired or stale lease generation.
 - It revalidates the full SPEC digest, base commit, lease generation, and lease
@@ -39,6 +43,8 @@ The controller applies these boundaries:
 - It uses fast-forward-only promotion.
 - It selects at most one self-improvement candidate and requires that candidate
   to pass all gates without baseline regression or gate mutation.
+- It verifies the deterministic quality rank and selected candidate again in
+  SQLite before it records a promotion decision.
 - It preserves failed worktrees for inspection.
 - It records an agent-startup or controller exception as a terminal failed run
   when the current lease still has authority.
@@ -50,6 +56,11 @@ These controls do not create a complete security sandbox. The configured agent,
 operating system, Git hooks, test commands, package managers, and build tools can
 execute code. Use an operating-system sandbox or disposable machine for
 untrusted repositories.
+
+Git does not provide insertion or deletion counts for binary changes. The
+controller counts each binary path as one changed file and zero changed lines.
+The change-surface vector is a deterministic selection rule. It is not proof
+that a change is safe, maintainable, or semantically better.
 
 Output redaction is a defense-in-depth control. It cannot identify every secret
 format or sensitive value. A process must not print secrets.

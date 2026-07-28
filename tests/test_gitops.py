@@ -11,6 +11,7 @@ from autobuild.gitops import (
     commit_candidate,
     create_worktree,
     current_commit,
+    measure_change_surface,
     promote_fast_forward,
 )
 
@@ -60,6 +61,27 @@ def test_base_change_prevents_promotion(git_repository: Path) -> None:
 
     with pytest.raises(GitError, match="base commit changed"):
         promote_fast_forward(git_repository, worktree, base)
+
+
+def test_committed_change_surface_counts_files_and_lines(git_repository: Path) -> None:
+    base = current_commit(git_repository)
+    worktree = create_worktree(
+        git_repository,
+        git_repository / ".autobuild" / "worktrees",
+        "run-quality",
+        "task",
+        base,
+    )
+    (worktree.path / "README.md").write_text("# revised\n", encoding="utf-8")
+    (worktree.path / "candidate.txt").write_text("one\ntwo\n", encoding="utf-8")
+    candidate = commit_candidate(worktree, "candidate quality")
+
+    quality = measure_change_surface(worktree.path, base, candidate)
+
+    assert quality.changed_files == 2
+    assert quality.insertions == 3
+    assert quality.deletions == 1
+    assert quality.changed_lines == 4
 
 
 def test_cleanup_preserves_dirty_successful_worktree(git_repository: Path) -> None:

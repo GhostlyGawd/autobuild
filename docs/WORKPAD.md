@@ -37,7 +37,7 @@
 - [x] Make malformed child output nonfatal and deterministic.
 - [x] Add a renewable controller ownership lease.
 - [x] Add bounded multi-candidate experiment ranking and promotion decisions.
-- [ ] Add deterministic Git change-surface quality evidence.
+- [x] Add deterministic Git change-surface quality evidence.
 
 ## Acceptance criteria
 
@@ -72,7 +72,8 @@
 | Successful-worktree cleanup | Required | `gitops.py`, `orchestrator.py` | Clean removal and dirty preservation tests | README, architecture, SECURITY | Proven |
 | Bounded self-improvement | Required | normal work-item route | Live generation 1 | SPEC, architecture | Proven for one local cycle |
 | Measured self-improvement comparison | Required | baseline and candidate vectors with pass deltas | Improvement and unchanged-failure tests | README, SPEC, architecture, lifecycle contract | Promoted in `3a13e08` |
-| Ranked self-improvement experiments | Required | `config.py`, `orchestrator.py`, `state.py` | Multi-candidate tie-break and candidate-timeout lifecycle tests | README, architecture, security, lifecycle contract | Proven for deterministic Boolean gate scores |
+| Ranked self-improvement experiments | Required | `config.py`, `orchestrator.py`, `state.py` | Multi-candidate tie-break and candidate-timeout lifecycle tests | README, architecture, security, lifecycle contract | Proven for fan-out, eligibility, and preservation; quality ranking is below |
+| Git change-surface quality ranking | Required | `models.py`, `gitops.py`, `orchestrator.py`, `state.py` | Git metric, tampering, unequal-quality, and exact-tie tests | README, architecture, security, lifecycle contract | Proven in focused worker tests |
 | Automated controlled-English precheck | Required | `writing.py`, CLI gate | Writing precheck tests and live command | README, writing standard | Proven for limited automated scope |
 | Full STE claim requires human reviews | Required | repository policy and docs | Deterministic release labels | README, AGENTS, writing standard | Not released; human reviews unavailable |
 
@@ -213,6 +214,31 @@ Alignment review for the quality-aware desired-state addition:
   writing-standard, visual, license, and provenance claims do not change at
   this desired-state checkpoint.
 
+Alignment review for `quality-aware-ranking`:
+
+- Required conflict repaired: eligible self-improvement candidates previously
+  ranked by Boolean gate-pass score instead of committed Git change surface.
+- The controller now measures changed files, insertions, deletions, and total
+  changed lines from the claimed base to each candidate commit. All gates,
+  non-regression checks, authority checks, and mutation checks remain required.
+- SQLite now stores constrained immutable quality vectors, recomputes
+  deterministic ranks, permits one selected row, and verifies that later
+  promotion decisions still refer to the selected candidate commit and quality
+  evidence.
+- Eligible candidates rank by fewer changed lines, fewer changed files, and
+  ascending candidate ID. Failure injections cover inconsistent metrics,
+  direct SQLite tampering, unequal quality, and exact ties.
+- Documentation-only drift repaired: README, architecture, security, lifecycle
+  behavior, lifecycle evidence, and the control-flow visual now describe the
+  Git quality vector and selection rule.
+- Reviewed and unaffected: `SPEC.json` already owns the exact objective and
+  acceptance criteria, so desired-state content does not change.
+- Reviewed and unaffected: setup, adapter selection, controller leases, process
+  isolation, secret redaction, cleanup, writing-standard, release, version,
+  license, provenance, contribution, and support boundaries do not change.
+- Reviewed and unaffected: the lifecycle schema remains accurate because the
+  instance adds evidence within the existing document structure.
+
 ## Implementation progress
 
 The bootstrap reconciler provides a standard-library runtime and a Codex CLI
@@ -265,7 +291,10 @@ Evidence recorded on 2026-07-28:
 | Run Python gate | Parent environment has no source path | Import candidate package deterministically | Environment assertion and full gate replay | `test_gate_environment_uses_candidate_source_and_isolated_pytest` |
 | Evaluate self-improvement | Baseline fails and candidate passes | Record measurable improvement | Baseline and evaluation events | `test_self_improvement_records_baseline_and_improvement` |
 | Evaluate unchanged failure | Baseline and candidate gate fail | Record zero delta and no improvement | Baseline and evaluation events | `test_self_improvement_does_not_call_an_unchanged_failure_a_regression` |
-| Rank three candidates | Two eligible candidates have equal scores | Select candidate-001 and promote only it | Candidate rows, ranks, selection, promotion decision, and preserved non-winners | `test_self_improvement_ranks_candidates_and_promotes_deterministic_winner` |
+| Rank three candidates | Two eligible candidates have exact quality ties | Select candidate-001 and promote only it | Quality vectors, ranks, selection, promotion decision, and preserved non-winners | `test_self_improvement_ranks_candidates_and_promotes_deterministic_winner` |
+| Measure committed candidate | One file is replaced and one file is added | Count two files, three insertions, one deletion, and four changed lines | Git comparison result | `test_committed_change_surface_counts_files_and_lines` |
+| Rank unequal quality | Eligible candidates have unequal line and file counts | Rank fewer lines first and fewer files second | Quality vectors, ranks, selection, and promoted commit | `test_self_improvement_ranks_unequal_quality_before_candidate_id` |
+| Record tampered metric | Changed lines differ from insertions plus deletions | Reject the vector before ranking or promotion | Failed run, SQLite constraint, absent rank, and absent decision | `test_quality_metric_tampering_prevents_ranking_and_promotion`, `test_sqlite_rejects_quality_metric_tampering` |
 | Exhaust candidate budgets | Both agents exceed the per-candidate duration | Record complete not-run gate vectors and refuse promotion | Timed-out candidate rows, rankings, no-eligible decision, and unchanged Git | `test_self_improvement_candidate_timeout_prevents_promotion` |
 | Exceed experiment policy | Candidate count, one-candidate timeout, or aggregate candidate-seconds exceed a hard ceiling | Reject configuration before dispatch | Configuration error assertions | `test_config_requires_bounded_self_improvement_policy` |
 | Record experiment evidence | Run generation differs | Reject the candidate evidence mutation | Empty candidate ranking projection | `test_stale_generation_cannot_change_experiment_evidence` |
@@ -452,6 +481,33 @@ Ranked self-improvement implementation evidence recorded on 2026-07-28:
 - Primary Codeweb review found no new cycle, confirmed duplication, or lost
   caller.
 
+Quality-aware ranking implementation evidence recorded on 2026-07-28:
+
+- This bounded worker started from
+  `48bc7ca7a1a94446b031163332fc72d8be37c3bd`.
+- The five focused change-surface, tampering, unequal-quality, and exact-tie
+  tests passed.
+- The focused Git, state, and orchestrator suite passed all 38 tests.
+- `PYTHONPATH=src PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q`
+  passed all 56 tests.
+- `python -m ruff check .` passed.
+- `PYTHONPATH=src python -m autobuild writing-check` found no automated
+  findings. Its final status remained
+  `NOT RELEASED — COMPLIANCE CHECK INCOMPLETE`.
+- `PYTHONPATH=src python -m autobuild validate --skip-git-clean` passed
+  configuration, SPEC, executable, and Draft 2020-12 lifecycle-contract
+  checks.
+- The exact clean-tree validation passed every semantic check. It reported only
+  the expected `git-clean` failure because this worker must leave the candidate
+  uncommitted for controller evaluation.
+- Codeweb mapping, context, impact, similarity, placement, refresh, and diff
+  calls were cancelled before a graph was available. Direct call-site review,
+  the full lifecycle suite, Ruff, schema validation, and diff checks provide
+  the available structural evidence.
+- Pytest emitted the known ignored Windows permission warning while its exit
+  cleanup inspected an ambient temporary-directory link. The test command
+  returned success and did not change repository files.
+
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
 autoloading. A fresh project virtual environment remains the supported setup.
@@ -481,8 +537,7 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: ranked experiments and hard resource ceilings are pushed. The
-quality-aware ranking item is ready.
+Status: quality-aware ranking is implemented in this bounded worker worktree.
 
-Next owner and action: push this desired-state checkpoint, then run the first
-live multi-candidate reconciliation.
+Next owner and action: review the worker diff and validation evidence. The
+controller can then evaluate and promote the candidate under its normal gates.

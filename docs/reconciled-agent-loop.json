@@ -65,12 +65,18 @@
       "owner": "Git base repository and reconciler",
       "failure_domain": "The agent owns edits only in its worktree",
       "authority_loss_behavior": "Stop an active child, preserve the candidate, and refuse promotion after base movement"
+    },
+    {
+      "resource": "Self-improvement quality evidence",
+      "owner": "Committed Git comparison and constrained SQLite records",
+      "failure_domain": "A worker or controller value cannot define its own rank or promotion decision",
+      "authority_loss_behavior": "Reject an inconsistent quality vector, nondeterministic rank, or promotion decision that does not refer to the selected commit"
     }
   ],
   "reconciliation": {
     "observation": "Load the current SPEC, Git commit, controller lease, work items, runs, leases, and event history",
     "comparison": "Acquire current controller ownership, then find an eligible desired item that has no current run and remains below its attempt limit",
-    "action": "Renew controller ownership, create a generation-fenced run, isolate one worktree for product work or a bounded set for self-improvement, execute each agent, evaluate gates, rank eligible self-improvement candidates, revalidate, and promote at most one candidate inside the controller-owned operation boundary",
+    "action": "Renew controller ownership, create a generation-fenced run, isolate one worktree for product work or a bounded set for self-improvement, execute each agent, evaluate gates, measure each committed candidate against the claimed Git base, rank eligible self-improvement candidates by the verified quality vectors, revalidate, and promote at most one candidate inside the controller-owned operation boundary",
     "repeat_condition": "Repeat while eligible work exists; re-observe after each state change, restart, timeout, or external change"
   },
   "dispatch_revalidation": {
@@ -106,7 +112,7 @@
   "preservation_cleanup": [
     {
       "semantic_condition": "The run is executing, evaluating, promoting, failed, or stale",
-      "artifact_action": "Preserve each worktree, candidate commit, gate vector, score, ranking, decision, and result summary",
+      "artifact_action": "Preserve each worktree, candidate commit, gate vector, Git change-surface vector, ranking, decision, and result summary",
       "revalidation": "Read the durable run state before any future cleanup"
     },
     {
@@ -215,12 +221,12 @@
       "classification": "execution",
       "owner": "Reconciler and configured gate runner",
       "entry": "The product agent exits successfully or the bounded self-improvement candidate agents finish under the current lease",
-      "exit": "Any failed gate fails product work; self-improvement ranks all candidates and continues only with one all-pass non-regressing winner",
-      "revalidation": "Each heartbeat and gate-completion boundary compare the full SPEC digest and base commit, then renew controller ownership and validate the run generation and run lease time before recording a gate result",
+      "exit": "Any failed gate fails product work; self-improvement measures committed Git change surfaces, verifies deterministic ranking, and continues only with one all-pass non-regressing winner",
+      "revalidation": "Each heartbeat and gate-completion boundary compare the full SPEC digest and base commit, then renew controller ownership and validate the run generation and run lease time before recording a gate result; SQLite verifies each quality vector and rank before selection",
       "retry_timeout": "A current heartbeat renews controller and run leases; gate timeout or authority loss stops the child and fails or stales the run",
       "restart": "An expired lease makes the run stale; preserve results",
-      "disposal": "Preserve gate output in bounded event evidence",
-      "proof": "test_gate_failure_prevents_promotion, test_self_improvement_ranks_candidates_and_promotes_deterministic_winner, test_self_improvement_candidate_timeout_prevents_promotion, test_active_agent_stops_after_spec_authority_loss, and test_active_agent_stops_after_base_commit_authority_loss"
+      "disposal": "Preserve gate output, committed quality vectors, deterministic ranks, and the promotion decision",
+      "proof": "test_gate_failure_prevents_promotion, test_self_improvement_ranks_candidates_and_promotes_deterministic_winner, test_self_improvement_ranks_unequal_quality_before_candidate_id, test_quality_metric_tampering_prevents_ranking_and_promotion, test_self_improvement_candidate_timeout_prevents_promotion, test_active_agent_stops_after_spec_authority_loss, and test_active_agent_stops_after_base_commit_authority_loss"
     },
     {
       "name": "promoting",
@@ -376,11 +382,25 @@
       "durable_evidence": "Baseline, candidate, measured evaluation, failed run, and preserved worktree"
     },
     {
-      "sequence": "create three isolated self-improvement candidates from one base, pass two equal-score candidates, and fail the third",
+      "sequence": "create three isolated self-improvement candidates from one base, give two eligible candidates exact quality ties, and fail the third",
       "transition": "executing through deterministic ranking, promoting, and succeeded",
-      "failure_injection": "Give the first two candidates equal all-pass scores",
-      "expected_semantic_outcome": "Ascending candidate ID breaks the score tie, selects only candidate-001, and promotes only that candidate",
-      "durable_evidence": "Three candidate rows, complete gate vectors, deterministic ranks, one selected row, promotion decision, promoted commit, and preserved non-winner worktrees"
+      "failure_injection": "Give the first two eligible candidates equal changed-line and changed-file counts",
+      "expected_semantic_outcome": "Ascending candidate ID breaks the exact quality tie, selects only candidate-001, and promotes only that candidate",
+      "durable_evidence": "Three candidate rows, complete gate and quality vectors, deterministic ranks, one selected row, promotion decision, promoted commit, and preserved non-winner worktrees"
+    },
+    {
+      "sequence": "create three all-pass self-improvement candidates with unequal committed change surfaces",
+      "transition": "executing through deterministic ranking, promoting, and succeeded",
+      "failure_injection": "Give candidates different changed-line counts and an equal-line pair with different changed-file counts",
+      "expected_semantic_outcome": "Fewer changed lines rank first, fewer changed files break the line-count tie, and only the best eligible candidate is promoted",
+      "durable_evidence": "Committed Git comparisons, constrained SQLite quality vectors, deterministic ranks, one selection, and the promoted smallest change surface"
+    },
+    {
+      "sequence": "measure an all-pass candidate, replace its total changed lines with an inconsistent value, and attempt ranking",
+      "transition": "evaluating to failed before ranking or promotion",
+      "failure_injection": "Return a changed-line total that does not equal insertions plus deletions",
+      "expected_semantic_outcome": "SQLite rejects the vector and the controller records no rank or promotion decision",
+      "durable_evidence": "Failed run, unchanged base commit, unranked candidate row, absent promotion decision, and SQLite constraint assertion"
     },
     {
       "sequence": "run two self-improvement agents longer than the configured candidate process-time limit",
