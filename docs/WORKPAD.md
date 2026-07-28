@@ -30,7 +30,7 @@
 - [x] Add the automated controlled-English precheck and release boundary.
 - [x] Add semantic cleanup for successful worktrees.
 - [x] Retry the live product reconciliation after the failed run lease expires.
-- [ ] Run the first bounded self-improvement experiment.
+- [x] Run the first bounded self-improvement experiment.
 - [x] Add baseline and candidate gate vectors for self-improvement work.
 - [ ] Add richer quality metrics and multi-candidate experiment ranking.
 
@@ -62,8 +62,8 @@
 | Candidate immutability after verification | Required | `orchestrator.py`, `gitops.py` | Gate-mutation negative | README, architecture | Proven |
 | Isolated, fast-forward-only promotion | Required | `gitops.py` | Git integration tests | README, architecture | Proven |
 | Successful-worktree cleanup | Required | `gitops.py`, `orchestrator.py` | Clean removal and dirty preservation tests | README, architecture, SECURITY | Proven |
-| Bounded self-improvement | Required | normal work-item route | Pending | SPEC, architecture | Partial |
-| Measured self-improvement comparison | Required | baseline and candidate vectors with pass deltas | Improvement and unchanged-failure tests | README, SPEC, architecture, lifecycle contract | Candidate gates passed; promotion pending |
+| Bounded self-improvement | Required | normal work-item route | Live generation 1 | SPEC, architecture | Proven for one local cycle |
+| Measured self-improvement comparison | Required | baseline and candidate vectors with pass deltas | Improvement and unchanged-failure tests | README, SPEC, architecture, lifecycle contract | Promoted in `3a13e08` |
 | Automated controlled-English precheck | Required | `writing.py`, CLI gate | Writing precheck tests and live command | README, writing standard | Proven for limited automated scope |
 | Full STE claim requires human reviews | Required | repository policy and docs | Deterministic release labels | README, AGENTS, writing standard | Not released; human reviews unavailable |
 
@@ -174,8 +174,12 @@ Candidate evidence recorded on 2026-07-28 for
   findings; final status remained `NOT RELEASED — COMPLIANCE CHECK INCOMPLETE`.
 - `PYTHONPATH=src python -m autobuild validate --skip-git-clean`: configuration,
   SPEC, executable, and Draft 2020-12 lifecycle-contract checks passed.
-- The configured candidate gate vector is 4 of 4 passed. The controller must
-  commit the candidate before it runs the clean-state promotion check.
+- The controller committed the candidate before it ran the 4-of-4 passing gate
+  vector and clean-state promotion check.
+- The controller recorded the live baseline and candidate vectors as 4 of 4
+  passed and classified the candidate as a non-regression.
+- The controller promoted commit `3a13e08`, marked the self-improvement item
+  achieved, and cleaned only the successful candidate worktree.
 
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
@@ -201,10 +205,11 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: the bounded `recursive-improvement-cycle` candidate records numeric
-gate pass deltas and passes the configured gate vector in its isolated
-worktree. Promotion is pending.
+Status: the first bounded `recursive-improvement-cycle` completed. The
+controller promoted commit `3a13e08566e916ec7d8af3c8f4577f43812b2751`,
+recorded a non-regression, marked the item achieved, and cleaned its successful
+worktree.
 
-Next owner and action: the autonomous orchestrator must commit the candidate,
-replay the configured gates, record the measured evaluation, revalidate the
-base and SPEC, and use fast-forward-only promotion.
+Next owner and action: the autonomous orchestrator must push the promoted
+candidate, then bind achieved work items to individual SPEC revisions instead
+of the whole-file digest.
