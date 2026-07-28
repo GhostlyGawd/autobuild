@@ -38,7 +38,7 @@
 - [x] Add a renewable controller ownership lease.
 - [x] Add bounded multi-candidate experiment ranking and promotion decisions.
 - [x] Add deterministic Git change-surface quality evidence.
-- [ ] Reconcile interrupted local Git promotions.
+- [x] Reconcile interrupted local Git promotions.
 
 ## Acceptance criteria
 
@@ -75,7 +75,7 @@
 | Measured self-improvement comparison | Required | baseline and candidate vectors with pass deltas | Improvement and unchanged-failure tests | README, SPEC, architecture, lifecycle contract | Promoted in `3a13e08` |
 | Ranked self-improvement experiments | Required | `config.py`, `orchestrator.py`, `state.py` | Multi-candidate tie-break and candidate-timeout lifecycle tests | README, architecture, security, lifecycle contract | Proven for fan-out, eligibility, and preservation; quality ranking is below |
 | Git change-surface quality ranking | Required | `models.py`, `gitops.py`, `orchestrator.py`, `state.py` | Git metric, tampering, unequal-quality, exact-tie, and legacy-status tests | README, architecture, security, lifecycle contract | Promoted after three-candidate dogfood; live quality ordering remains pending |
-| Promotion crash recovery | Required | planned `state.py`, `orchestrator.py`, and `gitops.py` changes | planned crash-window and restart matrix | SPEC, README, architecture, SECURITY, lifecycle contract | Desired; not implemented |
+| Promotion crash recovery | Required | immutable intent and fenced recovery in `state.py` and `orchestrator.py`; existing exact Git observations in `gitops.py` | before-Git, after-Git, post-success, divergence, stale-authority, stale-controller, and idempotent-restart tests | SPEC, README, architecture, SECURITY, lifecycle contract | Worker implementation proven; live dogfood remains pending |
 | Automated controlled-English precheck | Required | `writing.py`, CLI gate | Writing precheck tests and live command | README, writing standard | Proven for limited automated scope |
 | Full STE claim requires human reviews | Required | repository policy and docs | Deterministic release labels | README, AGENTS, writing standard | Not released; human reviews unavailable |
 
@@ -315,6 +315,38 @@ Alignment and plan contract for `promotion-crash-recovery`:
   adapter, security, architecture, visuals, lifecycle behavior, examples,
   version, readiness, license, provenance, contribution, and support claims do
   not change until a candidate is promoted.
+
+Alignment review for `promotion-crash-recovery` implementation:
+
+- Required conflict repaired: Git could reach the selected candidate while the
+  durable run remained `promoting`.
+- Implementation-defined omission repaired: SQLite now stores a write-once
+  intent before Git changes the base. The intent binds the run generation,
+  expected base, candidate commit, worktree, full SPEC digest, and canonical
+  work-item digest.
+- Required recovery behavior added: a current replacement controller repairs
+  the run, item achievement, and self-improvement decision in one SQLite
+  transaction only when the base is the exact candidate and both SPEC
+  identities remain current.
+- Required refusal behavior added: an unchanged base makes the run retryable.
+  A divergent base or stale SPEC authority records refusal. Recovery does not
+  run Git and preserves the worktree.
+- Documentation-only drift repaired: README, architecture, security guidance,
+  lifecycle behavior, and the control-flow visual now show the intent and
+  restart decision.
+- Reviewed and unaffected: `SPEC.json` already defines the objective and exact
+  acceptance criteria. Setup, configuration, adapter, writing-release, version,
+  readiness, license, provenance, contribution, and support behavior do not
+  change.
+- Completion state: self-contained worker change. No external gate, remote
+  mutation, or post-merge evidence is required for handoff. Live dogfood is
+  separate dated evidence and does not replace the failure-injection matrix.
+- Worker evidence recorded on 2026-07-28: the full repository suite passed 64
+  tests; Ruff passed the full tree; the automated writing precheck reported no
+  findings and retained its non-release label; lifecycle Draft 2020-12 schema
+  validation passed. Repository validation also passed configuration, SPEC,
+  and executable checks. Its `git-clean` check remains open because this
+  bounded worker handoff intentionally contains uncommitted changes.
 
 ## Implementation progress
 

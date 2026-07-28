@@ -31,6 +31,8 @@ The controller applies these boundaries:
 - It stores nonnegative file, insertion, deletion, and changed-line counts in
   SQLite. SQLite requires changed lines to equal insertions plus deletions.
 - It uses SQLite triggers to reject later quality-vector updates or deletion.
+- It stores promotion authority in a write-once SQLite row before Git changes
+  the base. SQLite triggers reject later intent updates or deletion.
 - It revalidates the SPEC digest and base commit before dispatch and promotion.
 - It rejects events that have an expired or stale lease generation.
 - It revalidates the full SPEC digest, base commit, lease generation, and lease
@@ -38,6 +40,11 @@ The controller applies these boundaries:
 - It renews the lease only while all heartbeat authority checks pass.
 - It holds an immediate SQLite ownership transaction during local promotion so
   another controller cannot take ownership during the Git mutation.
+- It lets only the current replacement controller reconcile a promotion
+  intent. Recovery requires current SPEC identities and an exact intended
+  candidate commit.
+- It never runs a Git command during promotion recovery. A divergent base or
+  stale SPEC authority records refusal and remains unchanged.
 - It stops the child process, makes the run stale, and records one bounded
   authority-loss cause if a heartbeat check fails.
 - It uses fast-forward-only promotion.
@@ -45,7 +52,7 @@ The controller applies these boundaries:
   to pass all gates without baseline regression or gate mutation.
 - It verifies the deterministic quality rank and selected candidate again in
   SQLite before it records a promotion decision.
-- It preserves failed worktrees for inspection.
+- It preserves failed, stale, and recovered worktrees for inspection.
 - It records an agent-startup or controller exception as a terminal failed run
   when the current lease still has authority.
 - It removes only a successful, clean, registered worktree below the configured

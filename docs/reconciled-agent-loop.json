@@ -9,7 +9,8 @@
       "work item id",
       "canonical work item digest for achieved-state identity",
       "full SPEC digest for active-run fencing",
-      "base commit"
+      "base commit",
+      "immutable promotion intent"
     ],
     "scheduling_fields": [
       "kind",
@@ -35,7 +36,7 @@
     {"name": "leased", "meaning": "The controller created a fenced claim"},
     {"name": "executing", "meaning": "The agent can change only the isolated worktree"},
     {"name": "evaluating", "meaning": "Configured gates evaluate the candidate"},
-    {"name": "promoting", "meaning": "Fresh reads passed and local promotion is in progress"},
+    {"name": "promoting", "meaning": "Fresh reads passed, immutable intent is stored, and local promotion is in progress"},
     {"name": "awaiting-promotion", "meaning": "A verified candidate is in a stable manual-promotion handoff"},
     {"name": "succeeded", "meaning": "The verified candidate reached the base repository"},
     {"name": "failed", "meaning": "The attempt ended without semantic success"},
@@ -67,6 +68,12 @@
       "authority_loss_behavior": "Stop an active child, preserve the candidate, and refuse promotion after base movement"
     },
     {
+      "resource": "Interrupted promotion",
+      "owner": "Immutable SQLite intent, current SPEC, current Git base, and current replacement controller",
+      "failure_domain": "Git can complete before SQLite success finalization",
+      "authority_loss_behavior": "Finalize only the exact intended candidate under current SPEC authority; otherwise record refusal, preserve the worktree, and never overwrite Git"
+    },
+    {
       "resource": "Self-improvement quality evidence",
       "owner": "Committed Git comparison and constrained SQLite records",
       "failure_domain": "A worker or controller value cannot define its own rank or promotion decision",
@@ -74,9 +81,9 @@
     }
   ],
   "reconciliation": {
-    "observation": "Load the current SPEC, Git commit, controller lease, work items, runs, leases, and event history",
-    "comparison": "Acquire current controller ownership, then find an eligible desired item that has no current run and remains below its attempt limit",
-    "action": "Renew controller ownership, create a generation-fenced run, isolate one worktree for product work or a bounded set for self-improvement, execute each agent, evaluate gates, measure each committed candidate against the claimed Git base, rank eligible self-improvement candidates by the verified quality vectors, revalidate, and promote at most one candidate inside the controller-owned operation boundary",
+    "observation": "Load the current SPEC, Git commit, controller lease, work items, runs, leases, immutable promotion intents, and event history",
+    "comparison": "Acquire current controller ownership, reconcile one unresolved promotion intent, then find an eligible desired item that has no current run and remains below its attempt limit",
+    "action": "Recover only an exact already-applied promotion under current SPEC authority, or renew controller ownership, create a generation-fenced run, isolate one worktree for product work or a bounded set for self-improvement, execute each agent, evaluate gates, measure each committed candidate against the claimed Git base, rank eligible self-improvement candidates by the verified quality vectors, revalidate, store immutable intent, and promote at most one candidate inside the controller-owned operation boundary",
     "repeat_condition": "Repeat while eligible work exists; re-observe after each state change, restart, timeout, or external change"
   },
   "dispatch_revalidation": {
@@ -105,14 +112,14 @@
     ]
   },
   "restart_stale_events": {
-    "restart_behavior": "A replacement controller waits for the current ownership lease to expire, acquires a higher controller generation, expires old nonterminal run leases, preserves their artifacts, and creates a new run generation only on a later claim",
+    "restart_behavior": "A replacement controller waits for the current ownership lease to expire, acquires a higher controller generation, reconciles unresolved promotion intent against current SPEC and Git, preserves uncertain artifacts, and creates a new run generation only on a later claim",
     "fencing_token": "The controller owner and monotonically increasing controller generation fence scheduling and promotion; the run id and monotonically increasing per-item generation fence run events",
     "stale_event_disposition": "Reject the state change and retain the prior durable event history"
   },
   "preservation_cleanup": [
     {
-      "semantic_condition": "The run is executing, evaluating, promoting, failed, or stale",
-      "artifact_action": "Preserve each worktree, candidate commit, gate vector, Git change-surface vector, ranking, decision, and result summary",
+      "semantic_condition": "The run is executing, evaluating, promoting, recovered, failed, or stale",
+      "artifact_action": "Preserve each worktree, candidate commit, gate vector, Git change-surface vector, ranking, promotion intent, decision, and result summary",
       "revalidation": "Read the durable run state before any future cleanup"
     },
     {
@@ -233,24 +240,24 @@
       "classification": "execution",
       "owner": "Reconciler with the current controller owner token and generation",
       "entry": "All product gates pass, or one ranked self-improvement candidate is all-pass and non-regressing, and fresh SPEC and base-commit reads match the claim",
-      "exit": "Fast-forward success reaches succeeded; Git invariant failure reaches failed",
-      "revalidation": "Validate controller ownership and read the base commit immediately before fast-forward merge; hold the SQLite ownership transaction during promotion",
+      "exit": "Fast-forward success or exact restart recovery reaches succeeded; pre-Git interruption or authority conflict reaches stale; Git invariant failure reaches failed",
+      "revalidation": "Validate controller ownership, store immutable intent, and read the base commit immediately before fast-forward merge; on restart compare current SPEC identities and exact Git commit with the intent",
       "retry_timeout": "Do not retry a promotion after base movement without a new generation",
-      "restart": "Re-observe Git reachability and durable state before any action",
-      "disposal": "Preserve candidate and promotion evidence",
-      "proof": "test_base_change_prevents_promotion, test_controller_lease_renews_and_fences_state_mutation, and test_concurrent_controller_cannot_dispatch_while_owner_is_current"
+      "restart": "A current replacement controller finalizes the exact intended candidate once, makes a pre-Git interruption retryable, or records refusal for divergence or stale SPEC authority",
+      "disposal": "Preserve candidate, worktree, immutable intent, and recovery evidence",
+      "proof": "test_base_change_prevents_promotion, test_controller_lease_renews_and_fences_state_mutation, test_promotion_intent_is_immutable_and_stale_controller_cannot_recover, test_restart_after_crash_before_git_makes_run_retryable, test_restart_after_crash_after_git_finalizes_once, test_restart_repairs_decision_after_run_success, test_restart_refuses_divergent_base_without_overwrite, and test_restart_refuses_stale_spec_authority_after_git"
     },
     {
       "name": "succeeded",
       "classification": "execution",
       "owner": "SQLite state store after observed Git success",
-      "entry": "Fast-forward promotion returns the promoted commit",
+      "entry": "Fast-forward promotion returns the promoted commit, or restart recovery observes the exact intended candidate under current authority",
       "exit": "Terminal",
       "revalidation": "Confirm the promoted commit is reachable before later cleanup",
       "retry_timeout": "No retry",
-      "restart": "Retain terminal state",
-      "disposal": "Retain compact evidence; remove the worktree only after all semantic cleanup checks pass",
-      "proof": "test_success_marks_item_achieved"
+      "restart": "Retain terminal state and repair a matching incomplete self-improvement promotion decision once",
+      "disposal": "Retain compact evidence; normal completion can clean the worktree, but restart recovery preserves it",
+      "proof": "test_success_marks_item_achieved, test_restart_after_crash_after_git_finalizes_once, and test_restart_repairs_decision_after_run_success"
     },
     {
       "name": "awaiting-promotion",
@@ -436,6 +443,55 @@
       "failure_injection": "Controller process loss without graceful lease release",
       "expected_semantic_outcome": "The replacement controller acquires ownership and completes reconciliation",
       "durable_evidence": "Increasing controller acquisition generations, expired lease status, and recovered successful run"
+    },
+    {
+      "sequence": "store immutable promotion intent, stop the controller before Git changes the base, then restart",
+      "transition": "promoting to stale and active item to ready",
+      "failure_injection": "Controller process loss before the fast-forward command",
+      "expected_semantic_outcome": "The replacement controller makes the item retryable without changing Git",
+      "durable_evidence": "Immutable intent, unchanged base commit, stale run, ready item, and preserved worktree"
+    },
+    {
+      "sequence": "store immutable promotion intent, fast-forward Git, stop before SQLite success, then restart",
+      "transition": "promoting to succeeded and active item to achieved",
+      "failure_injection": "Controller process loss immediately after Git success",
+      "expected_semantic_outcome": "The replacement controller finalizes the exact intended commit and selected self-improvement decision",
+      "durable_evidence": "Immutable intent, exact base commit, succeeded run, achieved item, promoted decision, and preserved worktree"
+    },
+    {
+      "sequence": "fast-forward Git, record run success, stop before the self-improvement decision update, then restart",
+      "transition": "succeeded remains succeeded while the decision becomes promoted",
+      "failure_injection": "Controller process loss after run success",
+      "expected_semantic_outcome": "The replacement controller repairs only the matching incomplete decision",
+      "durable_evidence": "Succeeded run, achieved item, selected candidate evidence, repaired decision, and one recovery event"
+    },
+    {
+      "sequence": "store immutable promotion intent, stop before Git, advance the base with an unrelated commit, then restart",
+      "transition": "promoting to stale conflict",
+      "failure_injection": "Move the base to a commit other than the expected base or candidate",
+      "expected_semantic_outcome": "Recovery records refusal and never overwrites the unrelated commit",
+      "durable_evidence": "Divergent Git commit, stale run, refusal event, immutable intent, and preserved worktree"
+    },
+    {
+      "sequence": "store immutable promotion intent, apply its candidate with a changed SPEC, stop, then restart",
+      "transition": "promoting to stale authority refusal",
+      "failure_injection": "Make the current full or canonical work-item SPEC digest differ from the intent",
+      "expected_semantic_outcome": "Recovery does not finalize stale authority or change Git",
+      "durable_evidence": "Intent SPEC identities, current SPEC identities, stale run, refusal event, and unchanged candidate commit"
+    },
+    {
+      "sequence": "recover one already-applied promotion, then restart again",
+      "transition": "promoting to succeeded followed by no recovery transition",
+      "failure_injection": "Run recovery more than once for the same immutable intent",
+      "expected_semantic_outcome": "Only the first replacement controller records recovery and later controllers do no duplicate work",
+      "durable_evidence": "One recovery event, one run row, one promotion decision, achieved item, and idle restart"
+    },
+    {
+      "sequence": "store promotion intent under one controller, let its lease expire, acquire a replacement generation, then call recovery with both controller tokens",
+      "transition": "stale controller mutation rejected; replacement mutation accepted",
+      "failure_injection": "Use the expired controller token for promotion recovery",
+      "expected_semantic_outcome": "Only the current controller generation can finalize the intent",
+      "durable_evidence": "Controller generations, immutable intent, rejection assertion, and one succeeded run"
     }
   ]
 }

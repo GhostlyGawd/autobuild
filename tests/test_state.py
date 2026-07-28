@@ -514,6 +514,7 @@ def test_status_does_not_create_or_require_controller_ownership(
         "recent_runs": [],
         "candidate_rankings": [],
         "promotion_decisions": [],
+        "promotion_intents": [],
     }
     assert not store.path.exists()
 
@@ -540,6 +541,7 @@ def test_status_reads_state_without_experiment_tables(tmp_path: Path) -> None:
     assert status["controller_lease"] is None
     assert status["candidate_rankings"] == []
     assert status["promotion_decisions"] == []
+    assert status["promotion_intents"] == []
 
 
 def test_status_preserves_legacy_experiment_evidence_before_migration(
@@ -661,3 +663,106 @@ def test_controller_lease_renews_and_fences_state_mutation(
         pass
     with store.controller_operation(second, 2):
         pass
+
+
+def test_promotion_intent_is_immutable_and_stale_controller_cannot_recover(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = datetime(2026, 7, 28, tzinfo=UTC)
+    monkeypatch.setattr(state_module, "_now", lambda: clock)
+    store, controller = owned_store(tmp_path)
+    desired = specification(("task", 1))
+    store.sync_spec(desired, controller_lease=controller)
+    claim = store.claim_next(
+        desired, "base", 60, 3, controller_lease=controller
+    )
+    assert claim is not None
+    worktree = tmp_path / "candidate"
+    store.transition(
+        claim,
+        RunStatus.LEASED,
+        RunStatus.EXECUTING,
+        controller_lease=controller,
+        worktree=worktree,
+    )
+    store.transition(
+        claim,
+        RunStatus.EXECUTING,
+        RunStatus.EVALUATING,
+        controller_lease=controller,
+    )
+    store.transition(
+        claim,
+        RunStatus.EVALUATING,
+        RunStatus.PROMOTING,
+        controller_lease=controller,
+    )
+    store.record_promotion_intent(
+        claim,
+        "candidate",
+        worktree,
+        controller_lease=controller,
+    )
+    intent = store.status()["promotion_intents"][0]
+    assert {
+        "run_id": intent["run_id"],
+        "generation": intent["generation"],
+        "expected_base": intent["expected_base"],
+        "candidate_commit": intent["candidate_commit"],
+        "worktree": intent["worktree"],
+        "spec_digest": intent["spec_digest"],
+        "work_item_spec_digest": intent["work_item_spec_digest"],
+    } == {
+        "run_id": claim.run_id,
+        "generation": claim.generation,
+        "expected_base": claim.base_commit,
+        "candidate_commit": "candidate",
+        "worktree": str(worktree),
+        "spec_digest": claim.spec_digest,
+        "work_item_spec_digest": claim.work_item.spec_digest,
+    }
+
+    with (
+        sqlite3.connect(store.path) as connection,
+        pytest.raises(sqlite3.IntegrityError, match="immutable"),
+    ):
+        connection.execute(
+            """
+            UPDATE promotion_intents
+            SET candidate_commit = 'replacement'
+            WHERE run_id = ?
+            """,
+            (claim.run_id,),
+        )
+    with (
+        sqlite3.connect(store.path) as connection,
+        pytest.raises(sqlite3.IntegrityError, match="immutable"),
+    ):
+        connection.execute(
+            "DELETE FROM promotion_intents WHERE run_id = ?",
+            (claim.run_id,),
+        )
+
+    clock += timedelta(seconds=61)
+    replacement = store.acquire_controller_lease(
+        tmp_path,
+        60,
+        owner_id="replacement-controller",
+    )
+    with pytest.raises(ControllerLeaseError):
+        store.recover_promotion(
+            desired,
+            "candidate",
+            controller_lease=controller,
+        )
+
+    recovered = store.recover_promotion(
+        desired,
+        "candidate",
+        controller_lease=replacement,
+    )
+
+    assert recovered is not None
+    assert recovered.status == "succeeded"
+    assert store.status()["recent_runs"][0]["status"] == "succeeded"

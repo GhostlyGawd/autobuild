@@ -89,6 +89,13 @@ class Orchestrator:
         if not is_clean(self.root):
             return RunOutcome(None, "deferred", "base repository has uncommitted changes")
         base_commit = current_commit(self.root)
+        recovered = self.store.recover_promotion(
+            specification,
+            base_commit,
+            controller_lease=controller_lease,
+        )
+        if recovered is not None:
+            return recovered
         claim = self.store.claim_next(
             specification,
             base_commit,
@@ -698,6 +705,12 @@ class Orchestrator:
                     f"verified candidate {candidate}",
                     worktree.path,
                 )
+            self.store.record_promotion_intent(
+                claim,
+                candidate,
+                worktree.path,
+                controller_lease=controller_lease,
+            )
             with self.store.controller_operation(
                 controller_lease,
                 self.config.lease_seconds,

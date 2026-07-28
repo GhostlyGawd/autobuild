@@ -16,6 +16,7 @@ from .models import (
     ChangeSurface,
     Claim,
     ControllerLease,
+    RunOutcome,
     RunStatus,
     WorkItem,
     WorkKind,
@@ -156,6 +157,16 @@ class StateStore:
                     promoted_commit TEXT,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS promotion_intents (
+                    run_id TEXT PRIMARY KEY REFERENCES runs(id),
+                    generation INTEGER NOT NULL,
+                    expected_base TEXT NOT NULL,
+                    candidate_commit TEXT NOT NULL,
+                    worktree TEXT NOT NULL,
+                    spec_digest TEXT NOT NULL,
+                    work_item_spec_digest TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS experiment_quality (
                     run_id TEXT NOT NULL,
                     candidate_id TEXT NOT NULL,
@@ -185,6 +196,16 @@ class StateStore:
                 BEFORE DELETE ON experiment_quality
                 BEGIN
                     SELECT RAISE(ABORT, 'experiment quality is immutable');
+                END;
+                CREATE TRIGGER IF NOT EXISTS promotion_intents_no_update
+                BEFORE UPDATE ON promotion_intents
+                BEGIN
+                    SELECT RAISE(ABORT, 'promotion intent is immutable');
+                END;
+                CREATE TRIGGER IF NOT EXISTS promotion_intents_no_delete
+                BEFORE DELETE ON promotion_intents
+                BEGIN
+                    SELECT RAISE(ABORT, 'promotion intent is immutable');
                 END;
                 """
             )
@@ -1199,6 +1220,299 @@ class StateStore:
                 ),
             )
 
+    def record_promotion_intent(
+        self,
+        claim: Claim,
+        candidate_commit: str,
+        worktree: Path,
+        *,
+        controller_lease: ControllerLease,
+    ) -> None:
+        now = _timestamp()
+        worktree_value = str(worktree)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_controller_lease(connection, controller_lease, now)
+            run = connection.execute(
+                """
+                SELECT run.base_commit, run.spec_digest, run.worktree,
+                       item.kind, item.spec_digest AS work_item_spec_digest
+                FROM runs AS run
+                JOIN work_items AS item ON item.id = run.work_item_id
+                WHERE run.id = ? AND run.generation = ?
+                  AND run.status = 'promoting'
+                  AND run.lease_expires_at > ?
+                """,
+                (claim.run_id, claim.generation, now),
+            ).fetchone()
+            if run is None:
+                raise StaleLeaseError(
+                    f"run {claim.run_id} generation {claim.generation} is not current"
+                )
+            if (
+                run["base_commit"] != claim.base_commit
+                or run["spec_digest"] != claim.spec_digest
+                or run["work_item_spec_digest"] != claim.work_item.spec_digest
+            ):
+                raise ValueError("promotion intent does not match run authority")
+            if run["kind"] == WorkKind.SELF_IMPROVEMENT.value:
+                selected = connection.execute(
+                    """
+                    SELECT candidate.candidate_commit, candidate.worktree
+                    FROM experiment_candidates AS candidate
+                    JOIN experiment_quality AS quality
+                      ON quality.run_id = candidate.run_id
+                     AND quality.candidate_id = candidate.candidate_id
+                    WHERE candidate.run_id = ? AND candidate.selected = 1
+                    """,
+                    (claim.run_id,),
+                ).fetchone()
+                if (
+                    selected is None
+                    or selected["candidate_commit"] != candidate_commit
+                    or selected["worktree"] != worktree_value
+                ):
+                    raise ValueError(
+                        "promotion intent does not match the selected candidate"
+                    )
+            elif run["worktree"] != worktree_value:
+                raise ValueError("promotion intent does not match the run worktree")
+            connection.execute(
+                """
+                INSERT INTO promotion_intents(
+                    run_id, generation, expected_base, candidate_commit,
+                    worktree, spec_digest, work_item_spec_digest, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    claim.run_id,
+                    claim.generation,
+                    claim.base_commit,
+                    candidate_commit,
+                    worktree_value,
+                    claim.spec_digest,
+                    claim.work_item.spec_digest,
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO events(run_id, kind, payload_json, created_at)
+                VALUES (?, 'promotion_intent_recorded', ?, ?)
+                """,
+                (
+                    claim.run_id,
+                    json.dumps(
+                        {
+                            "candidate_commit": candidate_commit,
+                            "expected_base": claim.base_commit,
+                            "worktree": worktree_value,
+                        },
+                        sort_keys=True,
+                    ),
+                    now,
+                ),
+            )
+
+    def recover_promotion(
+        self,
+        specification: Specification,
+        base_commit: str,
+        *,
+        controller_lease: ControllerLease,
+    ) -> RunOutcome | None:
+        now = _timestamp()
+        desired_items = {item.id: item for item in specification.work_items}
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_controller_lease(connection, controller_lease, now)
+            intents = connection.execute(
+                """
+                SELECT intent.*, run.work_item_id, run.status, run.spec_digest AS run_spec,
+                       run.generation AS run_generation, item.kind,
+                       decision.decision, decision.candidate_commit AS decision_commit,
+                       decision.promoted_commit
+                FROM promotion_intents AS intent
+                JOIN runs AS run ON run.id = intent.run_id
+                JOIN work_items AS item ON item.id = run.work_item_id
+                LEFT JOIN promotion_decisions AS decision
+                  ON decision.run_id = intent.run_id
+                ORDER BY intent.created_at, intent.run_id
+                """
+            ).fetchall()
+            intent = next(
+                (
+                    row
+                    for row in intents
+                    if row["status"] == RunStatus.PROMOTING.value
+                    or (
+                        row["status"] == RunStatus.SUCCEEDED.value
+                        and row["kind"] == WorkKind.SELF_IMPROVEMENT.value
+                        and (
+                            row["decision"] != "promoted"
+                            or row["promoted_commit"] != row["candidate_commit"]
+                        )
+                    )
+                ),
+                None,
+            )
+            if intent is None:
+                return None
+
+            desired_item = desired_items.get(intent["work_item_id"])
+            authority_current = (
+                specification.digest == intent["spec_digest"]
+                and intent["run_spec"] == intent["spec_digest"]
+                and intent["run_generation"] == intent["generation"]
+                and desired_item is not None
+                and desired_item.spec_digest == intent["work_item_spec_digest"]
+            )
+            if not authority_current:
+                outcome = "stale-authority"
+                detail = "promotion recovery refused stale SPEC authority"
+            elif base_commit == intent["candidate_commit"]:
+                repaired_run = intent["status"] == RunStatus.PROMOTING.value
+                if repaired_run:
+                    cursor = connection.execute(
+                        """
+                        UPDATE runs
+                        SET status = 'succeeded', detail = ?, updated_at = ?
+                        WHERE id = ? AND generation = ? AND status = 'promoting'
+                        """,
+                        (
+                            f"recovered promotion {intent['candidate_commit']}",
+                            now,
+                            intent["run_id"],
+                            intent["generation"],
+                        ),
+                    )
+                    if cursor.rowcount != 1:
+                        raise StaleLeaseError(
+                            f"run {intent['run_id']} promotion is not recoverable"
+                        )
+                connection.execute(
+                    """
+                    UPDATE work_items
+                    SET status = 'achieved', updated_at = ?
+                    WHERE id = ? AND spec_digest = ?
+                    """,
+                    (
+                        now,
+                        intent["work_item_id"],
+                        intent["work_item_spec_digest"],
+                    ),
+                )
+                repaired_decision = False
+                if intent["kind"] == WorkKind.SELF_IMPROVEMENT.value:
+                    selected = connection.execute(
+                        """
+                        SELECT candidate.candidate_commit
+                        FROM experiment_candidates AS candidate
+                        JOIN experiment_quality AS quality
+                          ON quality.run_id = candidate.run_id
+                         AND quality.candidate_id = candidate.candidate_id
+                        WHERE candidate.run_id = ? AND candidate.selected = 1
+                        """,
+                        (intent["run_id"],),
+                    ).fetchone()
+                    if (
+                        selected is None
+                        or selected["candidate_commit"] != intent["candidate_commit"]
+                        or intent["decision_commit"] != intent["candidate_commit"]
+                    ):
+                        raise ValueError(
+                            "promotion recovery has no matching selected candidate"
+                        )
+                    repaired_decision = (
+                        intent["decision"] != "promoted"
+                        or intent["promoted_commit"] != intent["candidate_commit"]
+                    )
+                    connection.execute(
+                        """
+                        UPDATE promotion_decisions
+                        SET decision = 'promoted', promoted_commit = ?, updated_at = ?
+                        WHERE run_id = ? AND candidate_commit = ?
+                        """,
+                        (
+                            intent["candidate_commit"],
+                            now,
+                            intent["run_id"],
+                            intent["candidate_commit"],
+                        ),
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO events(run_id, kind, payload_json, created_at)
+                    VALUES (?, 'promotion_recovered', ?, ?)
+                    """,
+                    (
+                        intent["run_id"],
+                        json.dumps(
+                            {
+                                "candidate_commit": intent["candidate_commit"],
+                                "repaired_promotion_decision": repaired_decision,
+                                "repaired_run": repaired_run,
+                            },
+                            sort_keys=True,
+                        ),
+                        now,
+                    ),
+                )
+                return RunOutcome(
+                    intent["run_id"],
+                    RunStatus.SUCCEEDED.value,
+                    f"recovered promotion {intent['candidate_commit']}",
+                    Path(intent["worktree"]),
+                )
+            elif base_commit == intent["expected_base"]:
+                outcome = "retryable"
+                detail = "promotion stopped before Git changed the base"
+            else:
+                outcome = "conflict"
+                detail = "promotion recovery refused a divergent base commit"
+
+            connection.execute(
+                """
+                UPDATE runs
+                SET status = 'stale', detail = ?, updated_at = ?
+                WHERE id = ? AND generation = ?
+                  AND status IN ('promoting', 'succeeded')
+                """,
+                (detail, now, intent["run_id"], intent["generation"]),
+            )
+            desired_status = "ready" if desired_item is not None else "superseded"
+            connection.execute(
+                """
+                UPDATE work_items
+                SET status = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (desired_status, now, intent["work_item_id"]),
+            )
+            connection.execute(
+                """
+                INSERT INTO events(run_id, kind, payload_json, created_at)
+                VALUES (?, 'promotion_recovery_refused', ?, ?)
+                """,
+                (
+                    intent["run_id"],
+                    json.dumps(
+                        {
+                            "base_commit": base_commit,
+                            "outcome": outcome,
+                        },
+                        sort_keys=True,
+                    ),
+                    now,
+                ),
+            )
+            return RunOutcome(
+                intent["run_id"],
+                RunStatus.STALE.value,
+                detail,
+                Path(intent["worktree"]),
+            )
+
     def status(self) -> dict[str, object]:
         if not self.path.is_file():
             return {
@@ -1207,6 +1521,7 @@ class StateStore:
                 "recent_runs": [],
                 "candidate_rankings": [],
                 "promotion_decisions": [],
+                "promotion_intents": [],
             }
         with self._read_only_connect() as connection:
             items = [
@@ -1316,10 +1631,29 @@ class StateStore:
                 if "no such table" not in str(error):
                     raise
                 promotion_decisions = []
+            try:
+                promotion_intents = [
+                    dict(row)
+                    for row in connection.execute(
+                        """
+                        SELECT run_id, generation, expected_base, candidate_commit,
+                               worktree, spec_digest, work_item_spec_digest,
+                               created_at
+                        FROM promotion_intents
+                        ORDER BY created_at DESC
+                        LIMIT 20
+                        """
+                    )
+                ]
+            except sqlite3.OperationalError as error:
+                if "no such table" not in str(error):
+                    raise
+                promotion_intents = []
             return {
                 "controller_lease": controller_status,
                 "work_items": items,
                 "recent_runs": runs,
                 "candidate_rankings": candidates,
                 "promotion_decisions": promotion_decisions,
+                "promotion_intents": promotion_intents,
             }

@@ -33,8 +33,12 @@ but the project is not production-ready.
   plugin autoloading.
 - Rejects a candidate if a gate changes the committed content.
 - Revalidates the SPEC and base commit before dispatch and promotion.
+- Stores a write-once promotion intent with the run, expected base, candidate
+  commit, worktree, and SPEC identities before it changes the base repository.
 - Holds the SQLite controller-ownership transaction while it performs local
   promotion.
+- Lets a replacement controller finalize an exact already-applied promotion
+  under current SPEC and controller authority.
 - Cleans a successful worktree only after reachability, path, registration, and
   clean-state checks pass.
 - Bounds self-improvement with a configured candidate count and a configured
@@ -111,6 +115,14 @@ Before it synchronizes or dispatches work, the controller acquires a renewable
 SQLite ownership lease for the resolved base repository. Each state mutation
 checks the controller owner token and generation. A replacement controller can
 acquire a higher generation only after graceful release or lease expiry.
+
+Before an automatic fast-forward, SQLite stores an immutable promotion intent.
+A replacement controller checks that intent before it creates a new claim. If
+the base is the intended candidate and both SPEC identities are current, one
+SQLite transaction repairs the run, item achievement, and self-improvement
+decision. If the base is unchanged, the old run becomes stale and retryable.
+If the base diverged or SPEC authority changed, recovery records refusal and
+does not run a Git command. Recovery preserves the recorded worktree.
 
 ## Important limitations
 

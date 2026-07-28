@@ -19,7 +19,8 @@ flowchart LR
     E --> K[Committed Git change surface<br/>and deterministic ranking]
     K -->|one eligible winner| V[Fresh SPEC and Git read]
     K -->|no eligible winner| F
-    V -->|unchanged| P[Fast-forward promotion]
+    V -->|unchanged| I[Write-once promotion intent]
+    I --> P[Fast-forward promotion]
     V -->|changed| H[Preserved stale candidate]
     E -->|product failure or mutation| F[Preserved failed candidate]
 ```
@@ -31,10 +32,10 @@ of isolated candidate worktrees. An agent changes each worktree. Verification
 gates evaluate each committed change. The controller ranks self-improvement
 candidates before it selects at most one candidate.
 
-The controller
-rejects a gate that changes the candidate. It reads the SPEC and base Git commit
-again. It promotes only an unchanged, verified, fast-forward candidate. It
-preserves failed or stale candidates.
+The controller rejects a gate that changes the candidate. It reads the SPEC and
+base Git commit again. It stores an immutable intent before it promotes an
+unchanged, verified, fast-forward candidate. It preserves failed or stale
+candidates.
 
 Diagram provenance: generated for `autobuild` from the repository lifecycle
 contract on 2026-07-28. The Mermaid source in this file is the authoritative
@@ -50,6 +51,7 @@ visual source.
 | Source revision | Git base repository | Changes only its worktree |
 | Lease and event history | SQLite state database | Submits fenced events |
 | Candidate content | Worktree branch | Can edit before evaluation |
+| Promotion intent | Immutable SQLite row bound to the run and both SPEC identities | None |
 | Promotion | Reconciler after fresh reads | None |
 
 The controller uses an observation, comparison, action, and re-observation loop.
@@ -87,6 +89,9 @@ starts evaluation, or promotes. Therefore, an authority loss during an agent
 or gate process cannot produce later candidate evaluation or promotion.
 
 Promotion starts only after the current controller lease passes validation.
+Before Git changes the base, SQLite stores the run generation, expected base,
+candidate commit, worktree, full SPEC digest, and canonical work-item digest.
+Triggers reject changes to or deletion of that intent.
 The controller holds an immediate SQLite transaction during the fast-forward
 operation. This transaction prevents another controller from acquiring
 ownership during the Git mutation.
@@ -155,7 +160,18 @@ quality fields. It does not initialize or migrate the database.
 The state database uses SQLite WAL mode. A controller restart cannot mutate
 state while another controller lease is current. After expiry, the replacement
 controller acquires a higher controller generation. It then reads current run
-states.
+states and unresolved promotion intents before it creates a new claim.
+
+Recovery compares the current full SPEC digest and canonical work-item digest
+with the intent. It also compares the exact base commit with the expected base
+and candidate commit. If the base equals the candidate, one SQLite transaction
+marks the run successful, repairs item achievement, and repairs the selected
+self-improvement promotion decision. If the base still equals the expected
+base, recovery makes the old run stale and retryable. A divergent base or stale
+SPEC authority makes the run stale without a Git operation. Repeated recovery
+does not create another success event.
+
+Recovery preserves the worktree.
 
 An expired nonterminal run becomes stale, and its work item becomes
 eligible for a new generation. Stale controller generations and stale run
@@ -182,7 +198,7 @@ not discard the handoff evidence.
   distributed consensus guarantee.
 - The Codex adapter is the only live agent adapter.
 - Promotion does not create pull requests or push changes.
-- The controller does not clean failed, stale, blocked, or manual-handoff
-  worktrees.
+- The controller does not clean recovered, failed, stale, blocked, or
+  manual-handoff worktrees.
 - Self-improvement ranking uses Git file and line counts. It does not measure
   performance, maintainability, semantic value, or binary line size.

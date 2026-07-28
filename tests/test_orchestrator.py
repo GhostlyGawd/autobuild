@@ -26,6 +26,10 @@ from autobuild.models import ChangeSurface, Gate
 from autobuild.orchestrator import Orchestrator
 
 
+class InjectedControllerCrash(BaseException):
+    """Simulate process death without controller exception finalization."""
+
+
 def config_for(
     root: Path,
     *,
@@ -820,3 +824,258 @@ def test_self_improvement_candidate_timeout_prevents_promotion(
     ]
     assert state["promotion_decisions"][0]["decision"] == "no-eligible-candidate"
     assert state["promotion_decisions"][0]["candidate_id"] is None
+
+
+def test_restart_after_crash_before_git_makes_run_retryable(
+    git_repository: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = current_commit(git_repository)
+    real_promote = orchestrator_module.promote_fast_forward
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(git_repository, gate_exit=0),
+    )
+
+    def crash_before_git(*_arguments: object) -> str:
+        raise InjectedControllerCrash
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "promote_fast_forward",
+        crash_before_git,
+    )
+    with pytest.raises(InjectedControllerCrash):
+        orchestrator.reconcile_once()
+
+    state = orchestrator.store.status()
+    assert current_commit(git_repository) == base
+    assert state["recent_runs"][0]["status"] == "promoting"
+    assert len(state["promotion_intents"]) == 1
+    worktree = Path(state["promotion_intents"][0]["worktree"])
+    assert worktree.exists()
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "promote_fast_forward",
+        real_promote,
+    )
+    recovered = Orchestrator(
+        git_repository,
+        config_for(git_repository, gate_exit=0),
+    ).reconcile_once()
+
+    assert recovered.status == "stale"
+    assert recovered.detail == "promotion stopped before Git changed the base"
+    assert current_commit(git_repository) == base
+    assert worktree.exists()
+    state = orchestrator.store.status()
+    assert state["recent_runs"][0]["status"] == "stale"
+    assert state["work_items"][0]["status"] == "ready"
+
+
+def test_restart_after_crash_after_git_finalizes_once(
+    git_repository: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_spec(git_repository, kind="self-improvement")
+    git(git_repository, "add", "SPEC.json")
+    git(git_repository, "commit", "-m", "request recoverable promotion")
+    real_promote = orchestrator_module.promote_fast_forward
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(git_repository, gate_exit=0),
+    )
+
+    def crash_after_git(*arguments: object) -> str:
+        real_promote(*arguments)
+        raise InjectedControllerCrash
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "promote_fast_forward",
+        crash_after_git,
+    )
+    with pytest.raises(InjectedControllerCrash):
+        orchestrator.reconcile_once()
+
+    state = orchestrator.store.status()
+    intent = state["promotion_intents"][0]
+    candidate = intent["candidate_commit"]
+    worktree = Path(intent["worktree"])
+    assert current_commit(git_repository) == candidate
+    assert state["recent_runs"][0]["status"] == "promoting"
+    assert state["promotion_decisions"][0]["decision"] == "selected-for-promotion"
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "promote_fast_forward",
+        real_promote,
+    )
+    replacement = Orchestrator(
+        git_repository,
+        config_for(git_repository, gate_exit=0),
+    )
+    recovered = replacement.reconcile_once()
+    restarted = Orchestrator(
+        git_repository,
+        config_for(git_repository, gate_exit=0),
+    ).reconcile_once()
+
+    assert recovered.status == "succeeded"
+    assert restarted.status == "idle"
+    assert current_commit(git_repository) == candidate
+    assert worktree.exists()
+    state = replacement.store.status()
+    assert state["recent_runs"][0]["status"] == "succeeded"
+    assert state["work_items"][0]["status"] == "achieved"
+    assert state["promotion_decisions"][0]["decision"] == "promoted"
+    assert state["promotion_decisions"][0]["promoted_commit"] == candidate
+    with sqlite3.connect(replacement.store.path) as connection:
+        recovered_events = connection.execute(
+            """
+            SELECT COUNT(*) FROM events
+            WHERE run_id = ? AND kind = 'promotion_recovered'
+            """,
+            (recovered.run_id,),
+        ).fetchone()[0]
+    assert recovered_events == 1
+
+
+def test_restart_repairs_decision_after_run_success(
+    git_repository: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_spec(git_repository, kind="self-improvement")
+    git(git_repository, "add", "SPEC.json")
+    git(git_repository, "commit", "-m", "request post-success recovery")
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(git_repository, gate_exit=0),
+    )
+
+    def crash_after_success(*_arguments: object, **_keywords: object) -> None:
+        raise InjectedControllerCrash
+
+    monkeypatch.setattr(
+        orchestrator.store,
+        "update_promotion_decision",
+        crash_after_success,
+    )
+    with pytest.raises(InjectedControllerCrash):
+        orchestrator.reconcile_once()
+
+    state = orchestrator.store.status()
+    candidate = state["promotion_intents"][0]["candidate_commit"]
+    assert current_commit(git_repository) == candidate
+    assert state["recent_runs"][0]["status"] == "succeeded"
+    assert state["promotion_decisions"][0]["decision"] == "selected-for-promotion"
+
+    monkeypatch.undo()
+    recovered = Orchestrator(
+        git_repository,
+        config_for(git_repository, gate_exit=0),
+    ).reconcile_once()
+
+    assert recovered.status == "succeeded"
+    state = orchestrator.store.status()
+    assert state["work_items"][0]["status"] == "achieved"
+    assert state["promotion_decisions"][0]["decision"] == "promoted"
+    assert state["promotion_decisions"][0]["promoted_commit"] == candidate
+
+
+def test_restart_refuses_divergent_base_without_overwrite(
+    git_repository: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_promote = orchestrator_module.promote_fast_forward
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(git_repository, gate_exit=0),
+    )
+
+    def crash_before_git(*_arguments: object) -> str:
+        raise InjectedControllerCrash
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "promote_fast_forward",
+        crash_before_git,
+    )
+    with pytest.raises(InjectedControllerCrash):
+        orchestrator.reconcile_once()
+    intent = orchestrator.store.status()["promotion_intents"][0]
+    worktree = Path(intent["worktree"])
+    (git_repository / "unrelated.txt").write_text("unrelated\n", encoding="utf-8")
+    git(git_repository, "add", "unrelated.txt")
+    git(git_repository, "commit", "-m", "move base independently")
+    divergent = current_commit(git_repository)
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "promote_fast_forward",
+        real_promote,
+    )
+    recovered = Orchestrator(
+        git_repository,
+        config_for(git_repository, gate_exit=0),
+    ).reconcile_once()
+
+    assert recovered.status == "stale"
+    assert recovered.detail == "promotion recovery refused a divergent base commit"
+    assert current_commit(git_repository) == divergent
+    assert current_commit(git_repository) != intent["candidate_commit"]
+    assert worktree.exists()
+
+
+def test_restart_refuses_stale_spec_authority_after_git(
+    git_repository: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent_code = (
+        "import json; from pathlib import Path; "
+        "path = Path('SPEC.json'); data = json.loads(path.read_text()); "
+        "data['objective'] = 'Changed candidate authority.'; "
+        "path.write_text(json.dumps(data)); "
+        "Path('candidate.txt').write_text('candidate\\n')"
+    )
+    real_promote = orchestrator_module.promote_fast_forward
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(
+            git_repository,
+            gate_exit=0,
+            agent_code=agent_code,
+        ),
+    )
+
+    def crash_after_git(*arguments: object) -> str:
+        real_promote(*arguments)
+        raise InjectedControllerCrash
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "promote_fast_forward",
+        crash_after_git,
+    )
+    with pytest.raises(InjectedControllerCrash):
+        orchestrator.reconcile_once()
+    intent = orchestrator.store.status()["promotion_intents"][0]
+    candidate = intent["candidate_commit"]
+    assert current_commit(git_repository) == candidate
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "promote_fast_forward",
+        real_promote,
+    )
+    recovered = Orchestrator(
+        git_repository,
+        config_for(git_repository, gate_exit=0),
+    ).reconcile_once()
+
+    assert recovered.status == "stale"
+    assert recovered.detail == "promotion recovery refused stale SPEC authority"
+    assert current_commit(git_repository) == candidate
+    state = orchestrator.store.status()
+    assert state["work_items"][0]["status"] == "ready"
