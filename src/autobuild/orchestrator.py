@@ -38,8 +38,8 @@ class Orchestrator:
         self.store = StateStore(self.config.state_path)
 
     def reconcile_once(self, *, kind: WorkKind | None = None) -> RunOutcome:
-        self.store.initialize()
         try:
+            self.store.initialize()
             controller_lease = self.store.acquire_controller_lease(
                 self.root,
                 self.config.lease_seconds,

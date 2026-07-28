@@ -228,6 +228,52 @@ def test_concurrent_controller_cannot_dispatch_while_owner_is_current(
     assert run_count == 1
 
 
+def test_concurrent_controller_defers_during_promotion_transaction(
+    git_repository: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_promote = orchestrator_module.promote_fast_forward
+    promotion_started = threading.Event()
+    allow_promotion = threading.Event()
+    first_outcomes = []
+
+    def wait_during_promotion(*args, **kwargs):
+        promotion_started.set()
+        if not allow_promotion.wait(timeout=15):
+            raise AssertionError("second controller did not reach the lock")
+        return original_promote(*args, **kwargs)
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "promote_fast_forward",
+        wait_during_promotion,
+    )
+    config = config_for(git_repository, gate_exit=0, lease_seconds=10)
+    first = Orchestrator(git_repository, config)
+    second = Orchestrator(git_repository, config)
+    thread = threading.Thread(
+        target=lambda: first_outcomes.append(first.reconcile_once()),
+        daemon=True,
+    )
+    thread.start()
+    assert promotion_started.wait(timeout=10)
+
+    try:
+        second_outcome = second.reconcile_once()
+    finally:
+        allow_promotion.set()
+        thread.join(timeout=10)
+
+    assert second_outcome.status == "deferred"
+    assert second_outcome.run_id is None
+    assert "active operation" in second_outcome.detail
+    assert len(first_outcomes) == 1
+    assert first_outcomes[0].status == "succeeded"
+    with sqlite3.connect(config.state_path) as connection:
+        run_count = connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+    assert run_count == 1
+
+
 def test_controller_restart_recovers_after_ownership_expiry(
     git_repository: Path,
     monkeypatch: pytest.MonkeyPatch,

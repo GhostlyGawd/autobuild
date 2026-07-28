@@ -161,6 +161,9 @@ Alignment review for `controller-ownership-lease`:
   that current controller lease.
 - Promotion holds an immediate SQLite ownership transaction across the local
   Git fast-forward operation.
+- Primary review repaired an uncovered lock-contention path. Schema
+  initialization now maps SQLite `BUSY` or `LOCKED` to a deferred controller
+  outcome while another controller holds the promotion transaction.
 - Status and repository validation remain lease-free. Status no longer
   synchronizes desired state into SQLite.
 - `SPEC.json` is reviewed and unaffected because it already defines this work
@@ -176,12 +179,13 @@ Alignment review for `controller-ownership-lease`:
 ## Implementation progress
 
 The bootstrap reconciler provides a standard-library runtime and a Codex CLI
-adapter. Each child-process heartbeat revalidates the full SPEC digest, base
-commit, lease generation, and lease time before it renews the lease. Authority
-loss stops the child, makes the run stale, and records a bounded cause. The
-controller commits only under current authority and rejects gate mutations. It
-cleans a verified successful worktree after all semantic checks pass. It
-preserves failed, stale, and manual-handoff worktrees.
+adapter. Each child-process heartbeat first revalidates the full SPEC digest
+and base commit. It then renews controller ownership and validates the run
+generation and run lease time. Authority loss stops the child, makes the run
+stale, and records a bounded cause. The controller commits only under current
+authority and rejects gate mutations. It cleans a verified successful worktree
+after all semantic checks pass. It preserves failed, stale, and
+manual-handoff worktrees.
 
 The first live product run found a Windows command-resolution defect. Python
 selected a restricted app-package executable instead of the npm command shim.
@@ -228,6 +232,7 @@ Evidence recorded on 2026-07-28:
 | Change an achieved item | Canonical item digest changes | Return the item to ready | SQLite item state | `test_success_marks_item_achieved` |
 | Migrate legacy identity | Stored item digest equals current full SPEC digest | Retain achieved state and store the item digest | SQLite digest and state | `test_sync_migrates_legacy_full_spec_digest_without_reopening` |
 | Start two controllers | First controller lease remains current | Defer the second controller before run creation or promotion | Controller acquisition event and one run row | `test_concurrent_controller_cannot_dispatch_while_owner_is_current` |
+| Start a controller during promotion | First controller holds the immediate ownership transaction | Map SQLite lock contention to a deferred outcome | Deferred outcome, one run row, and successful first promotion | `test_concurrent_controller_defers_during_promotion_transaction` |
 | Replace a crashed controller | Prior controller lease expires | Acquire a higher controller generation and complete reconciliation | Controller acquisition generations and recovered run | `test_controller_restart_recovers_after_ownership_expiry` |
 | Mutate with a stale controller | Another controller acquires after expiry | Reject state transition and promotion operation | SQLite controller row and typed rejection | `test_controller_lease_renews_and_fences_state_mutation` |
 | Inspect status during ownership | Another controller lease remains current | Return status without acquiring or changing ownership | Controller lease status projection | `test_controller_lease_is_exclusive_and_recovers_after_expiry` |
@@ -358,6 +363,18 @@ Controller ownership lease implementation evidence recorded on 2026-07-28:
 - Codeweb structural calls were unavailable because the bounded worker tool
   calls were cancelled. Direct diff review, Ruff, lifecycle schema validation,
   and the complete test suite provide the available structural evidence.
+- The controller promoted generation 2 as commit `b915668` and cleaned its
+  successful worktree.
+- Primary Codeweb review found no new cycle, confirmed duplication, or lost
+  non-exported caller in the promoted candidate.
+- Primary review added promotion-overlap failure injection. A second controller
+  now defers if schema initialization meets the active SQLite transaction.
+- Primary review also corrected lifecycle text to match the implemented
+  source-check, controller-renewal, and run-check order.
+- The post-review suite passed 47 tests. Ruff, repository validation, lifecycle
+  schema validation, and the writing precheck passed.
+- Post-review Codeweb analysis found no new cycle, confirmed duplication, or
+  lost caller.
 
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
@@ -388,9 +405,9 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: the bounded `controller-ownership-lease` implementation is complete in
-this worktree. Focused and complete tests pass.
+Status: the controller promoted `controller-ownership-lease`. Primary review
+repaired the SQLite lock-contention path and aligned the lifecycle contract.
 
-Next owner and action: review this uncommitted worktree and promote it through
-the owning controller. This bounded worker did not merge, push, or delete the
-worktree.
+Next owner and action: run the complete gates, inspect live controller-lease
+events during the next cycle, commit and push the review follow-up, then start
+the ranked self-improvement experiment.

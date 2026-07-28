@@ -54,14 +54,22 @@ class StateStore:
     def _connect(self) -> Iterator[sqlite3.Connection]:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self.path)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
         try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA journal_mode = WAL")
             yield connection
             connection.commit()
-        except BaseException:
+        except BaseException as error:
             connection.rollback()
+            if (
+                isinstance(error, sqlite3.OperationalError)
+                and getattr(error, "sqlite_errorcode", 0) & 0xFF
+                in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+            ):
+                raise ControllerLeaseError(
+                    "controller ownership is held by an active operation"
+                ) from error
             raise
         finally:
             connection.close()
