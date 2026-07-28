@@ -77,12 +77,12 @@ class Orchestrator:
 
             def revalidate_authority() -> None:
                 authority_loss = source_authority_loss()
-                self.store.renew_lease(claim, self.config.lease_seconds)
                 if authority_loss is not None:
                     raise StaleLeaseError(
                         f"run {claim.run_id} lost source authority",
                         authority_loss,
                     )
+                self.store.renew_lease(claim, self.config.lease_seconds)
 
             baseline_results: dict[str, bool] = {}
             if claim.work_item.kind is WorkKind.SELF_IMPROVEMENT:

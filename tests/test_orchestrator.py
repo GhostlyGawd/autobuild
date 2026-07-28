@@ -7,6 +7,7 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from conftest import git, write_spec
@@ -231,6 +232,7 @@ def test_dispatch_stops_after_base_change(
 
 def test_active_agent_stops_after_spec_authority_loss(
     git_repository: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     started_marker = git_repository.parent / "agent-started"
     evaluated_marker = git_repository.parent / "candidate-evaluated"
@@ -255,6 +257,8 @@ def test_active_agent_stops_after_spec_authority_loss(
             gate_code=gate_code,
         ),
     )
+    renew_lease = Mock(wraps=orchestrator.store.renew_lease)
+    monkeypatch.setattr(orchestrator.store, "renew_lease", renew_lease)
     base = current_commit(git_repository)
     thread_errors: list[BaseException] = []
 
@@ -284,6 +288,7 @@ def test_active_agent_stops_after_spec_authority_loss(
     assert outcome.worktree is not None
     assert not (outcome.worktree / "candidate.txt").exists()
     assert not evaluated_marker.exists()
+    assert renew_lease.call_count == 0
     with sqlite3.connect(orchestrator.config.state_path) as connection:
         event = connection.execute(
             """

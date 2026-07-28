@@ -270,8 +270,16 @@ Active-run cancellation evidence recorded on 2026-07-28:
   only the expected Git-clean check failed because this bounded worker must
   leave its implementation changes uncommitted for controller evaluation.
 - Codeweb structural tools were unavailable because each local tool call was
-  cancelled. Direct diff review, lint, lifecycle schema validation, and the
-  complete test suite supplied the available local evidence.
+  cancelled in the bounded worker. Direct diff review, lint, lifecycle schema
+  validation, and the complete test suite supplied its available evidence.
+- The controller promoted candidate `7a1ef5f` and cleaned its successful
+  worktree.
+- Primary review found that a failed source check preceded renewal but did not
+  prevent it. The follow-up orders all source checks before lease renewal.
+- The source-loss test now proves that the controller does not renew after a
+  failed source check.
+- Primary Codeweb review found no new cycle, confirmed duplication, or lost
+  caller after the follow-up.
 
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
@@ -297,8 +305,9 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: active-run cancellation is implemented and validated in the bounded
-worktree. The controller has not evaluated or promoted this candidate.
+Status: the controller promoted `active-run-cancellation`. Primary review
+repaired the heartbeat renewal order and added a regression assertion.
 
-Next owner and action: the autonomous orchestrator must evaluate this preserved
-candidate under the current SPEC and base-commit authority before promotion.
+Next owner and action: the autonomous orchestrator must run the complete gate
+set, commit and push the review follow-up, then reconcile
+`controller-ownership-lease`.
