@@ -146,6 +146,10 @@ stores the promotion decision. A later awaiting or promoted decision must still
 refer to the selected candidate, quality vector, and candidate commit. The
 JSON status output includes these records.
 
+Read-only status also supports a database created before the quality table
+existed. It returns the preserved candidate and promotion rows with null
+quality fields. It does not initialize or migrate the database.
+
 ## Recovery
 
 The state database uses SQLite WAL mode. A controller restart cannot mutate

@@ -73,7 +73,7 @@
 | Bounded self-improvement | Required | normal work-item route | Live generation 1 | SPEC, architecture | Proven for one local cycle |
 | Measured self-improvement comparison | Required | baseline and candidate vectors with pass deltas | Improvement and unchanged-failure tests | README, SPEC, architecture, lifecycle contract | Promoted in `3a13e08` |
 | Ranked self-improvement experiments | Required | `config.py`, `orchestrator.py`, `state.py` | Multi-candidate tie-break and candidate-timeout lifecycle tests | README, architecture, security, lifecycle contract | Proven for fan-out, eligibility, and preservation; quality ranking is below |
-| Git change-surface quality ranking | Required | `models.py`, `gitops.py`, `orchestrator.py`, `state.py` | Git metric, tampering, unequal-quality, and exact-tie tests | README, architecture, security, lifecycle contract | Proven in focused worker tests |
+| Git change-surface quality ranking | Required | `models.py`, `gitops.py`, `orchestrator.py`, `state.py` | Git metric, tampering, unequal-quality, exact-tie, and legacy-status tests | README, architecture, security, lifecycle contract | Promoted after three-candidate dogfood; live quality ordering remains pending |
 | Automated controlled-English precheck | Required | `writing.py`, CLI gate | Writing precheck tests and live command | README, writing standard | Proven for limited automated scope |
 | Full STE claim requires human reviews | Required | repository policy and docs | Deterministic release labels | README, AGENTS, writing standard | Not released; human reviews unavailable |
 
@@ -238,6 +238,14 @@ Alignment review for `quality-aware-ranking`:
   license, provenance, contribution, and support boundaries do not change.
 - Reviewed and unaffected: the lifecycle schema remains accurate because the
   instance adds evidence within the existing document structure.
+- Primary review repaired a required upgrade conflict. Read-only status hid
+  existing candidate and promotion rows when a pre-upgrade database did not
+  yet contain the new quality table. Status now returns those rows with null
+  quality fields and does not mutate the database.
+- `test_status_reads_state_without_experiment_tables` and
+  `test_status_preserves_legacy_experiment_evidence_before_migration` prove
+  the read-only fallbacks, preserved rank and selection, preserved promotion
+  decision, and absence of an implicit schema mutation.
 
 ## Implementation progress
 
@@ -298,6 +306,7 @@ Evidence recorded on 2026-07-28:
 | Exhaust candidate budgets | Both agents exceed the per-candidate duration | Record complete not-run gate vectors and refuse promotion | Timed-out candidate rows, rankings, no-eligible decision, and unchanged Git | `test_self_improvement_candidate_timeout_prevents_promotion` |
 | Exceed experiment policy | Candidate count, one-candidate timeout, or aggregate candidate-seconds exceed a hard ceiling | Reject configuration before dispatch | Configuration error assertions | `test_config_requires_bounded_self_improvement_policy` |
 | Record experiment evidence | Run generation differs | Reject the candidate evidence mutation | Empty candidate ranking projection | `test_stale_generation_cannot_change_experiment_evidence` |
+| Read legacy database | Experiment tables or only the quality table are absent | Return available legacy evidence with null quality fields and do not migrate state | Empty or preserved projections and unchanged SQLite schema | `test_status_reads_state_without_experiment_tables`, `test_status_preserves_legacy_experiment_evidence_before_migration` |
 | Add unrelated desired work | Full SPEC digest changes; item digest stays stable | Keep achieved item achieved | SQLite item state | `test_success_marks_item_achieved` |
 | Change an achieved item | Canonical item digest changes | Return the item to ready | SQLite item state | `test_success_marks_item_achieved` |
 | Migrate legacy identity | Stored item digest equals current full SPEC digest | Retain achieved state and store the item digest | SQLite digest and state | `test_sync_migrates_legacy_full_spec_digest_without_reopening` |
@@ -508,6 +517,38 @@ Quality-aware ranking implementation evidence recorded on 2026-07-28:
   cleanup inspected an ambient temporary-directory link. The test command
   returned success and did not change repository files.
 
+Quality-aware ranking live dogfood and primary-review evidence recorded on
+2026-07-28:
+
+- Run `0e5bf135-949b-4a4e-a923-970202fd218d` started three isolated candidates
+  from `48bc7ca7a1a94446b031163332fc72d8be37c3bd`.
+- Candidate 1 produced `394e63e`, candidate 2 produced `fa8abea`, and candidate
+  3 produced `b43bce8`. Each candidate passed all four controller gates and
+  was eligible.
+- The bootstrap controller ranked the exact Boolean-gate tie by ascending
+  candidate ID. It promoted candidate 1 as `394e63e`, cleaned only the winner
+  worktree, and preserved candidate 2 and candidate 3 worktrees.
+- The promoted checkpoint was pushed to
+  `origin/agent/bootstrap-autobuild`.
+- This run proves bounded fan-out, isolation, controller-gate replay,
+  deterministic prior-policy ranking, one-winner promotion, winner cleanup,
+  and non-winner preservation. It does not prove live Git change-surface
+  ordering because the running controller predated that behavior.
+- Primary review reproduced a read-only upgrade defect against the live state
+  database: status returned zero candidate and promotion rows before the
+  quality table existed. The repaired projection returns all three ranked
+  candidates and the promotion decision with null quality fields, and it
+  leaves the database schema unchanged.
+- The focused state suite passed all 16 tests after the repair.
+- Codeweb refresh and diff found no new cycle, confirmed duplication, or lost
+  caller after the primary repair.
+- The full isolated post-review suite passed all 58 tests. Ruff passed.
+- Repository validation passed configuration, SPEC, executable, and Draft
+  2020-12 lifecycle-contract checks. Exact validation reported only the
+  expected dirty-tree failure before the primary repair commit.
+- The writing precheck found no automated findings and retained
+  `NOT RELEASED — COMPLIANCE CHECK INCOMPLETE`.
+
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
 autoloading. A fresh project virtual environment remains the supported setup.
@@ -537,7 +578,9 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: quality-aware ranking is implemented in this bounded worker worktree.
+Status: quality-aware ranking is promoted and pushed. Primary review repaired
+the pre-migration read-only status projection.
 
-Next owner and action: review the worker diff and validation evidence. The
-controller can then evaluate and promote the candidate under its normal gates.
+Next owner and action: complete the full post-review gates, then add
+crash-safe promotion reconciliation as the next desired-state item. That live
+self-improvement run must also exercise the new Git change-surface ordering.

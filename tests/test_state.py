@@ -518,6 +518,101 @@ def test_status_does_not_create_or_require_controller_ownership(
     assert not store.path.exists()
 
 
+def test_status_reads_state_without_experiment_tables(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.db")
+    with sqlite3.connect(store.path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE work_items (
+                id TEXT, kind TEXT, priority INTEGER, status TEXT,
+                attempt_count INTEGER, updated_at TEXT
+            );
+            CREATE TABLE runs (
+                id TEXT, work_item_id TEXT, generation INTEGER,
+                status TEXT, base_commit TEXT, lease_expires_at TEXT,
+                detail TEXT, updated_at TEXT, created_at TEXT
+            );
+            """
+        )
+
+    status = store.status()
+
+    assert status["controller_lease"] is None
+    assert status["candidate_rankings"] == []
+    assert status["promotion_decisions"] == []
+
+
+def test_status_preserves_legacy_experiment_evidence_before_migration(
+    tmp_path: Path,
+) -> None:
+    store, controller = owned_store(tmp_path)
+    desired = specification(("task", 1))
+    store.sync_spec(desired, controller_lease=controller)
+    claim = store.claim_next(
+        desired, "base", 60, 3, controller_lease=controller
+    )
+    assert claim is not None
+    store.transition(
+        claim,
+        RunStatus.LEASED,
+        RunStatus.EXECUTING,
+        controller_lease=controller,
+    )
+    store.record_experiment_candidate(
+        claim,
+        candidate_id="candidate-001",
+        ordinal=1,
+        worktree=tmp_path / "candidate",
+        candidate_commit="candidate",
+        status="evaluated",
+        classification="non-regression",
+        gate_results={"test": True},
+        score=1,
+        all_pass=True,
+        non_regressing=True,
+        eligible=True,
+        quality=ChangeSurface(1, 1, 0, 1),
+        controller_lease=controller,
+    )
+    store.transition(
+        claim,
+        RunStatus.EXECUTING,
+        RunStatus.EVALUATING,
+        controller_lease=controller,
+    )
+    store.record_experiment_ranking(
+        claim,
+        ["candidate-001"],
+        "candidate-001",
+        controller_lease=controller,
+    )
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TRIGGER experiment_quality_no_update")
+        connection.execute("DROP TRIGGER experiment_quality_no_delete")
+        connection.execute("DROP TABLE experiment_quality")
+
+    status = store.status()
+
+    assert len(status["candidate_rankings"]) == 1
+    candidate = status["candidate_rankings"][0]
+    assert candidate["candidate_id"] == "candidate-001"
+    assert candidate["selected"] is True
+    assert candidate["rank"] == 1
+    assert candidate["changed_files"] is None
+    assert candidate["changed_lines"] is None
+    assert status["promotion_decisions"][0]["candidate_id"] == "candidate-001"
+    with sqlite3.connect(store.path) as connection:
+        assert (
+            connection.execute(
+                """
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'experiment_quality'
+                """
+            ).fetchone()
+            is None
+        )
+
+
 def test_controller_lease_renews_and_fences_state_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

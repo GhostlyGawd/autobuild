@@ -1245,40 +1245,61 @@ class StateStore:
                     **dict(controller),
                     "active": controller["lease_expires_at"] > _timestamp(),
                 }
+            candidate_query = """
+                SELECT candidate.run_id, candidate.candidate_id,
+                       candidate.ordinal, candidate.worktree,
+                       candidate.base_commit, candidate.candidate_commit,
+                       candidate.status, candidate.classification,
+                       candidate.gate_results_json, candidate.score,
+                       candidate.all_pass, candidate.non_regressing,
+                       candidate.eligible, candidate.rank,
+                       candidate.selected, quality.changed_files,
+                       quality.insertions, quality.deletions,
+                       quality.changed_lines, candidate.updated_at
+                FROM experiment_candidates AS candidate
+                LEFT JOIN experiment_quality AS quality
+                  ON quality.run_id = candidate.run_id
+                 AND quality.candidate_id = candidate.candidate_id
+                ORDER BY candidate.updated_at DESC, candidate.run_id,
+                         candidate.rank, candidate.ordinal
+                LIMIT 100
+            """
             try:
-                candidates = [
-                    {
-                        **dict(row),
-                        "gate_results": json.loads(row["gate_results_json"]),
-                        "all_pass": bool(row["all_pass"]),
-                        "non_regressing": bool(row["non_regressing"]),
-                        "eligible": bool(row["eligible"]),
-                        "selected": bool(row["selected"]),
-                    }
-                    for row in connection.execute(
+                candidate_rows = connection.execute(candidate_query)
+            except sqlite3.OperationalError as error:
+                if "no such table: experiment_candidates" in str(error):
+                    candidate_rows = []
+                elif "no such table: experiment_quality" not in str(error):
+                    raise
+                else:
+                    candidate_rows = connection.execute(
                         """
-                        SELECT candidate.run_id, candidate.candidate_id,
-                               candidate.ordinal, candidate.worktree,
-                               candidate.base_commit, candidate.candidate_commit,
-                               candidate.status, candidate.classification,
-                               candidate.gate_results_json, candidate.score,
-                               candidate.all_pass, candidate.non_regressing,
-                               candidate.eligible, candidate.rank,
-                               candidate.selected, quality.changed_files,
-                               quality.insertions, quality.deletions,
-                               quality.changed_lines, candidate.updated_at
-                        FROM experiment_candidates AS candidate
-                        LEFT JOIN experiment_quality AS quality
-                          ON quality.run_id = candidate.run_id
-                         AND quality.candidate_id = candidate.candidate_id
-                        ORDER BY candidate.updated_at DESC, candidate.run_id,
-                                 candidate.rank, candidate.ordinal
+                        SELECT run_id, candidate_id, ordinal, worktree,
+                               base_commit, candidate_commit, status,
+                               classification, gate_results_json, score,
+                               all_pass, non_regressing, eligible, rank,
+                               selected, NULL AS changed_files,
+                               NULL AS insertions, NULL AS deletions,
+                               NULL AS changed_lines, updated_at
+                        FROM experiment_candidates
+                        ORDER BY updated_at DESC, run_id, rank, ordinal
                         LIMIT 100
                         """
                     )
-                ]
-                for candidate in candidates:
-                    del candidate["gate_results_json"]
+            candidates = [
+                {
+                    **dict(row),
+                    "gate_results": json.loads(row["gate_results_json"]),
+                    "all_pass": bool(row["all_pass"]),
+                    "non_regressing": bool(row["non_regressing"]),
+                    "eligible": bool(row["eligible"]),
+                    "selected": bool(row["selected"]),
+                }
+                for row in candidate_rows
+            ]
+            for candidate in candidates:
+                del candidate["gate_results_json"]
+            try:
                 promotion_decisions = [
                     dict(row)
                     for row in connection.execute(
@@ -1294,7 +1315,6 @@ class StateStore:
             except sqlite3.OperationalError as error:
                 if "no such table" not in str(error):
                     raise
-                candidates = []
                 promotion_decisions = []
             return {
                 "controller_lease": controller_status,
