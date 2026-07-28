@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -242,3 +244,45 @@ def test_agent_startup_error_records_terminal_failure(git_repository: Path) -> N
     assert outcome.status == "failed"
     assert "executable not found" in outcome.detail
     assert orchestrator.store.status()["recent_runs"][0]["status"] == "failed"
+
+
+def test_self_improvement_records_baseline_and_improvement(
+    git_repository: Path,
+) -> None:
+    write_spec(git_repository, kind="self-improvement")
+    git(git_repository, "add", "SPEC.json")
+    git(git_repository, "commit", "-m", "request self improvement")
+    gate_code = (
+        "from pathlib import Path; "
+        "raise SystemExit(0 if Path('.git').is_file() else 1)"
+    )
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(
+            git_repository,
+            gate_exit=0,
+            gate_code=gate_code,
+        ),
+    )
+
+    outcome = orchestrator.reconcile_once()
+
+    assert outcome.status == "succeeded"
+    connection = sqlite3.connect(orchestrator.config.state_path)
+    rows = connection.execute(
+        """
+        SELECT kind, payload_json FROM events
+        WHERE run_id = ? AND kind IN (
+            'baseline_gate_finished',
+            'self_improvement_evaluated'
+        )
+        ORDER BY sequence
+        """,
+        (outcome.run_id,),
+    ).fetchall()
+    connection.close()
+    assert [row[0] for row in rows] == [
+        "baseline_gate_finished",
+        "self_improvement_evaluated",
+    ]
+    assert json.loads(rows[1][1])["classification"] == "improvement"

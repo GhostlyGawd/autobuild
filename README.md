@@ -26,6 +26,7 @@ but the project is not production-ready.
 - Cleans a successful worktree only after reachability, path, registration, and
   clean-state checks pass.
 - Uses the same path for product work and bounded self-improvement.
+- Records baseline and candidate gate vectors for self-improvement work.
 - Treats automated controlled-English checks as evidence, not as an
   ASD-STE100 compliance decision.
 

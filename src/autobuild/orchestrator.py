@@ -62,6 +62,67 @@ class Orchestrator:
         worktree = None
         execution_state = RunStatus.LEASED
         try:
+            heartbeat_interval = max(
+                0.1,
+                min(30.0, self.config.lease_seconds / 3),
+            )
+
+            def renew_lease() -> None:
+                self.store.renew_lease(claim, self.config.lease_seconds)
+
+            baseline_results: dict[str, bool] = {}
+            if claim.work_item.kind is WorkKind.SELF_IMPROVEMENT:
+                baseline_environment = gate_environment(
+                    safe_environment(
+                        self.config.policy.allowed_environment,
+                        self.config.policy.redacted_name_fragments,
+                    ),
+                    self.root,
+                )
+                for gate in self.config.gates:
+                    baseline = run_gate(
+                        gate,
+                        self.root,
+                        baseline_environment,
+                        heartbeat=renew_lease,
+                        heartbeat_interval_seconds=heartbeat_interval,
+                    )
+                    renew_lease()
+                    baseline_results[gate.name] = baseline.passed
+                    self.store.record_event(
+                        claim,
+                        "baseline_gate_finished",
+                        {
+                            "name": baseline.name,
+                            "returncode": baseline.returncode,
+                            "duration_seconds": round(
+                                baseline.duration_seconds,
+                                3,
+                            ),
+                            "timed_out": baseline.timed_out,
+                            "stdout": redact_text(
+                                baseline.stdout,
+                                self.config.policy.redacted_name_fragments,
+                            ),
+                            "stderr": redact_text(
+                                baseline.stderr,
+                                self.config.policy.redacted_name_fragments,
+                            ),
+                        },
+                    )
+                if not is_clean(self.root):
+                    self.store.transition(
+                        claim,
+                        RunStatus.LEASED,
+                        RunStatus.FAILED,
+                        detail="baseline gates changed the base repository",
+                    )
+                    return RunOutcome(
+                        claim.run_id,
+                        "failed",
+                        "baseline gates changed the base repository",
+                    )
+
             worktree = create_worktree(
                 self.root,
                 self.config.worktree_root,
@@ -99,13 +160,6 @@ class Orchestrator:
                 self.config.policy.allowed_environment,
                 self.config.policy.redacted_name_fragments,
             )
-            heartbeat_interval = max(
-                0.1,
-                min(30.0, self.config.lease_seconds / 3),
-            )
-
-            def renew_lease() -> None:
-                self.store.renew_lease(claim, self.config.lease_seconds)
 
             result = run_agent(
                 self.config.agent,
@@ -180,6 +234,16 @@ class Orchestrator:
                     },
                 )
                 if not gate_result.passed:
+                    if claim.work_item.kind is WorkKind.SELF_IMPROVEMENT:
+                        self.store.record_event(
+                            claim,
+                            "self_improvement_evaluated",
+                            {
+                                "classification": "regression",
+                                "failed_gate": gate.name,
+                                "baseline_passed": baseline_results.get(gate.name),
+                            },
+                        )
                     self.store.transition(
                         claim,
                         RunStatus.EVALUATING,
@@ -205,6 +269,23 @@ class Orchestrator:
                     "failed",
                     "verification gates changed the candidate",
                     worktree.path,
+                )
+            if claim.work_item.kind is WorkKind.SELF_IMPROVEMENT:
+                classification = (
+                    "improvement"
+                    if any(not passed for passed in baseline_results.values())
+                    else "non-regression"
+                )
+                self.store.record_event(
+                    claim,
+                    "self_improvement_evaluated",
+                    {
+                        "classification": classification,
+                        "baseline_gates": baseline_results,
+                        "candidate_gates": {
+                            gate.name: True for gate in self.config.gates
+                        },
+                    },
                 )
             current_spec = load_spec(self.root / "SPEC.json")
             if (

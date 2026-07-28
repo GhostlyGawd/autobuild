@@ -331,6 +331,13 @@
       "failure_injection": "Make the successful worktree dirty before cleanup",
       "expected_semantic_outcome": "Clean reachable worktrees are removed; dirty or uncertain worktrees are preserved",
       "durable_evidence": "Terminal cleanup event, Git worktree registry, and cleanup tests"
+    },
+    {
+      "sequence": "run baseline gates, dispatch self-improvement, then run candidate gates",
+      "transition": "leased baseline evaluation through normal execution and candidate evaluation",
+      "failure_injection": "Make a baseline gate fail and the candidate gate pass",
+      "expected_semantic_outcome": "Record an improvement classification and preserve both gate vectors",
+      "durable_evidence": "Baseline, candidate, and self-improvement evaluation events"
     }
   ]
 }

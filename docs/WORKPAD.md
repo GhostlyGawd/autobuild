@@ -31,7 +31,8 @@
 - [x] Add semantic cleanup for successful worktrees.
 - [x] Retry the live product reconciliation after the failed run lease expires.
 - [ ] Run the first bounded self-improvement experiment.
-- [ ] Add comparative improvement metrics for self-improvement work.
+- [x] Add baseline and candidate gate vectors for self-improvement work.
+- [ ] Add richer quality metrics and multi-candidate experiment ranking.
 
 ## Acceptance criteria
 
@@ -62,6 +63,7 @@
 | Isolated, fast-forward-only promotion | Required | `gitops.py` | Git integration tests | README, architecture | Proven |
 | Successful-worktree cleanup | Required | `gitops.py`, `orchestrator.py` | Clean removal and dirty preservation tests | README, architecture, SECURITY | Proven |
 | Bounded self-improvement | Required | normal work-item route | Pending | SPEC, architecture | Partial |
+| Binary self-improvement comparison | Required | baseline and candidate gate events | Injected baseline-failure test | SPEC, architecture | Proven |
 | Automated controlled-English precheck | Required | `writing.py`, CLI gate | Writing precheck tests and live command | README, writing standard | Proven for limited automated scope |
 | Full STE claim requires human reviews | Required | repository policy and docs | Deterministic release labels | README, AGENTS, writing standard | Not released; human reviews unavailable |
 
@@ -117,11 +119,12 @@ Evidence recorded on 2026-07-28:
 | Check configured Markdown | Long sentence or paragraph | Return a finding and block the gate | CLI and finding assertions | `test_writing.py` |
 | Clean successful worktree | Dirty worktree | Preserve uncertain content | Git registry and path assertions | `test_cleanup_preserves_dirty_successful_worktree` |
 | Run Python gate | Parent environment has no source path | Import candidate package deterministically | Environment assertion and full gate replay | `test_gate_environment_uses_candidate_source_and_isolated_pytest` |
+| Evaluate self-improvement | Baseline fails and candidate passes | Record measurable improvement | Baseline and evaluation events | `test_self_improvement_records_baseline_and_improvement` |
 
 Commands and outcomes:
 
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q`:
-  34 tests passed.
+  35 tests passed.
 - Focused lifecycle and security suite:
   27 tests passed.
 - `python -m ruff check .`: passed.
@@ -169,5 +172,5 @@ Status: live generation 3 completed the `bootstrap-reconciler` item. The
 controller promoted commit `42634971f60ba8b88781716e7d4793488fdebb4b`,
 recorded the item as achieved, and cleaned the successful worktree.
 
-Next owner and action: the autonomous orchestrator must push the promoted
-product commit, then run the first bounded self-improvement experiment.
+Next owner and action: the autonomous orchestrator must commit the binary
+comparison evidence, then run the first bounded self-improvement experiment.
