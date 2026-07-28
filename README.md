@@ -21,6 +21,8 @@ but the project is not production-ready.
 - Runs verification gates without a command shell.
 - Rejects a candidate if a gate changes the committed content.
 - Revalidates the SPEC and base commit before dispatch and promotion.
+- Cleans a successful worktree only after reachability, path, registration, and
+  clean-state checks pass.
 - Uses the same path for product work and bounded self-improvement.
 - Treats automated controlled-English checks as evidence, not as an
   ASD-STE100 compliance decision.

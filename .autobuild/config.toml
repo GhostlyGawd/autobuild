@@ -5,6 +5,7 @@ result_root = ".autobuild/results"
 lease_seconds = 900
 max_attempts = 3
 auto_promote = true
+cleanup_succeeded_worktrees = true
 
 [agent]
 kind = "codex"

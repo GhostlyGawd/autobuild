@@ -9,6 +9,7 @@ from .agent import run_agent
 from .config import Config, load_config
 from .gitops import (
     GitError,
+    cleanup_succeeded_worktree,
     commit_candidate,
     create_worktree,
     current_commit,
@@ -244,10 +245,32 @@ class Orchestrator:
                 RunStatus.SUCCEEDED,
                 detail=f"promoted {promoted}",
             )
+            detail = f"promoted {promoted}"
+            if self.config.cleanup_succeeded_worktrees:
+                try:
+                    cleanup_succeeded_worktree(
+                        self.root,
+                        self.config.worktree_root,
+                        worktree,
+                        promoted,
+                    )
+                    self.store.record_terminal_event(
+                        claim,
+                        "worktree_cleaned",
+                        {"path": str(worktree.path), "branch": worktree.branch},
+                    )
+                    detail += "; successful worktree cleaned"
+                except GitError as cleanup_error:
+                    self.store.record_terminal_event(
+                        claim,
+                        "worktree_cleanup_failed",
+                        {"detail": str(cleanup_error)},
+                    )
+                    detail += f"; cleanup preserved: {cleanup_error}"
             return RunOutcome(
                 claim.run_id,
                 "succeeded",
-                f"promoted {promoted}",
+                detail,
                 worktree.path,
             )
         except StaleLeaseError as error:

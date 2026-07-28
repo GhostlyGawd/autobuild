@@ -23,6 +23,8 @@ The controller applies these boundaries:
 - It preserves failed worktrees for inspection.
 - It records an agent-startup or controller exception as a terminal failed run
   when the current lease still has authority.
+- It removes only a successful, clean, registered worktree below the configured
+  worktree root after the promoted commit is reachable.
 
 These controls do not create a complete security sandbox. The configured agent,
 operating system, Git hooks, test commands, package managers, and build tools can

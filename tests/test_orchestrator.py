@@ -31,6 +31,7 @@ def config_for(
         lease_seconds=lease_seconds,
         max_attempts=3,
         auto_promote=auto_promote,
+        cleanup_succeeded_worktrees=True,
         agent=AgentConfig(
             kind="fake",
             command=(
@@ -88,6 +89,8 @@ def test_success_promotes_candidate_and_marks_item_achieved(
     assert outcome.status == "succeeded", outcome.detail
     assert current_commit(git_repository) != base
     assert (git_repository / "candidate.txt").read_text(encoding="utf-8") == "candidate\n"
+    assert outcome.worktree is not None
+    assert not outcome.worktree.exists()
     assert orchestrator.store.status()["work_items"][0]["status"] == "achieved"
 
 

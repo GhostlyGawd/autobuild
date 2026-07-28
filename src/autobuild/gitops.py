@@ -92,3 +92,41 @@ def promote_fast_forward(root: Path, worktree: Worktree, expected_base: str) -> 
         raise GitError("candidate is not a descendant of the expected base")
     _git(root, "merge", "--ff-only", candidate)
     return current_commit(root)
+
+
+def cleanup_succeeded_worktree(
+    root: Path,
+    worktree_root: Path,
+    worktree: Worktree,
+    promoted_commit: str,
+) -> None:
+    path = worktree.path.resolve()
+    try:
+        path.relative_to(worktree_root.resolve())
+    except ValueError as error:
+        raise GitError("cleanup path escaped the configured worktree root") from error
+    if not path.is_dir():
+        raise GitError("successful worktree is not present")
+    if not is_clean(path):
+        raise GitError("successful worktree has uncommitted changes")
+    if current_commit(path) != promoted_commit:
+        raise GitError("successful worktree does not match the promoted commit")
+    ancestor = _git(
+        root,
+        "merge-base",
+        "--is-ancestor",
+        promoted_commit,
+        current_commit(root),
+        check=False,
+    )
+    if ancestor.returncode != 0:
+        raise GitError("promoted commit is not reachable from the base repository")
+    registered = {
+        Path(line.removeprefix("worktree ")).resolve()
+        for line in _git(root, "worktree", "list", "--porcelain").stdout.splitlines()
+        if line.startswith("worktree ")
+    }
+    if path not in registered:
+        raise GitError("cleanup target is not a registered Git worktree")
+    _git(root, "worktree", "remove", str(path))
+    _git(root, "branch", "--delete", worktree.branch)

@@ -7,6 +7,7 @@ from conftest import git
 
 from autobuild.gitops import (
     GitError,
+    cleanup_succeeded_worktree,
     commit_candidate,
     create_worktree,
     current_commit,
@@ -31,6 +32,16 @@ def test_candidate_promotes_by_fast_forward(git_repository: Path) -> None:
     assert promoted == candidate
     assert (git_repository / "candidate.txt").read_text(encoding="utf-8") == "verified\n"
 
+    cleanup_succeeded_worktree(
+        git_repository,
+        git_repository / ".autobuild" / "worktrees",
+        worktree,
+        promoted,
+    )
+
+    assert not worktree.path.exists()
+    assert worktree.branch not in git(git_repository, "branch", "--list")
+
 
 def test_base_change_prevents_promotion(git_repository: Path) -> None:
     base = current_commit(git_repository)
@@ -49,3 +60,28 @@ def test_base_change_prevents_promotion(git_repository: Path) -> None:
 
     with pytest.raises(GitError, match="base commit changed"):
         promote_fast_forward(git_repository, worktree, base)
+
+
+def test_cleanup_preserves_dirty_successful_worktree(git_repository: Path) -> None:
+    base = current_commit(git_repository)
+    worktree = create_worktree(
+        git_repository,
+        git_repository / ".autobuild" / "worktrees",
+        "run-dirty",
+        "task",
+        base,
+    )
+    (worktree.path / "candidate.txt").write_text("candidate\n", encoding="utf-8")
+    candidate = commit_candidate(worktree, "candidate")
+    promote_fast_forward(git_repository, worktree, base)
+    (worktree.path / "uncommitted.txt").write_text("preserve\n", encoding="utf-8")
+
+    with pytest.raises(GitError, match="uncommitted changes"):
+        cleanup_succeeded_worktree(
+            git_repository,
+            git_repository / ".autobuild" / "worktrees",
+            worktree,
+            candidate,
+        )
+
+    assert worktree.path.exists()

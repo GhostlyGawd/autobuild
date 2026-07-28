@@ -69,6 +69,11 @@ item becomes eligible for a new generation. Stale events cannot update the new
 run. Failed and stale worktrees remain available until a later, explicit
 cleanup policy has semantic evidence that they are disposable.
 
+After a successful promotion, the controller can clean the successful
+worktree. It first checks path containment, clean state, candidate identity,
+commit reachability, and Git worktree registration. A failed cleanup preserves
+the worktree and records terminal evidence.
+
 When automatic promotion is disabled, a verified candidate enters a stable
 `awaiting-promotion` state. The work item becomes blocked, and lease expiry does
 not discard the handoff evidence.
@@ -80,6 +85,6 @@ not discard the handoff evidence.
   guarantee.
 - The Codex adapter is the only live agent adapter.
 - Promotion does not create pull requests or push changes.
-- The controller preserves worktrees but does not yet reconcile and clean
-  terminal worktrees.
+- The controller does not clean failed, stale, blocked, or manual-handoff
+  worktrees.
 - Comparative self-improvement metrics are specified but not implemented.

@@ -96,8 +96,8 @@
     },
     {
       "semantic_condition": "The run succeeded and the promoted commit is reachable from the base branch",
-      "artifact_action": "The worktree is eligible for a future exact-path cleanup policy",
-      "revalidation": "Confirm terminal state, reachability, no active process, and exact path before cleanup"
+      "artifact_action": "Remove the successful worktree and its merged branch when configured",
+      "revalidation": "Confirm terminal success, path containment, clean state, candidate identity, reachability, and Git worktree registration"
     },
     {
       "semantic_condition": "Artifact ownership or semantic disposition is uncertain",
@@ -228,7 +228,7 @@
       "revalidation": "Confirm the promoted commit is reachable before later cleanup",
       "retry_timeout": "No retry",
       "restart": "Retain terminal state",
-      "disposal": "Retain compact evidence; candidate is cleanup-eligible after checks",
+      "disposal": "Retain compact evidence; remove the worktree only after all semantic cleanup checks pass",
       "proof": "test_success_marks_item_achieved"
     },
     {
@@ -324,6 +324,13 @@
       "failure_injection": "Desired state changes after the claim transaction",
       "expected_semantic_outcome": "No worktree or agent process is dispatched",
       "durable_evidence": "Stale run detail and dispatch test assertions"
+    },
+    {
+      "sequence": "promote a verified candidate, record success, then clean its worktree",
+      "transition": "promoting to succeeded and terminal cleanup",
+      "failure_injection": "Make the successful worktree dirty before cleanup",
+      "expected_semantic_outcome": "Clean reachable worktrees are removed; dirty or uncertain worktrees are preserved",
+      "durable_evidence": "Terminal cleanup event, Git worktree registry, and cleanup tests"
     }
   ]
 }

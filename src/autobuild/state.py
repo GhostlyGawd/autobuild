@@ -400,6 +400,31 @@ class StateStore:
                 (claim.run_id, kind, json.dumps(payload, sort_keys=True), now),
             )
 
+    def record_terminal_event(
+        self,
+        claim: Claim,
+        kind: str,
+        payload: dict[str, object],
+    ) -> None:
+        now = _timestamp()
+        with self._connect() as connection:
+            current = connection.execute(
+                """
+                SELECT 1 FROM runs
+                WHERE id = ? AND generation = ?
+                  AND status IN ('awaiting-promotion', 'succeeded', 'failed', 'stale')
+                """,
+                (claim.run_id, claim.generation),
+            ).fetchone()
+            if current is None:
+                raise StaleLeaseError(
+                    f"run {claim.run_id} generation {claim.generation} is not terminal"
+                )
+            connection.execute(
+                "INSERT INTO events(run_id, kind, payload_json, created_at) VALUES(?, ?, ?, ?)",
+                (claim.run_id, kind, json.dumps(payload, sort_keys=True), now),
+            )
+
     def status(self) -> dict[str, object]:
         self.initialize()
         with self._connect() as connection:

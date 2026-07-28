@@ -36,6 +36,7 @@ class Config:
     lease_seconds: int
     max_attempts: int
     auto_promote: bool
+    cleanup_succeeded_worktrees: bool
     agent: AgentConfig
     policy: PolicyConfig
     gates: tuple[Gate, ...]
@@ -108,6 +109,9 @@ def load_config(root: Path, path: Path | None = None) -> Config:
         lease_seconds=_require_int(data, "lease_seconds"),
         max_attempts=_require_int(data, "max_attempts"),
         auto_promote=bool(data.get("auto_promote", False)),
+        cleanup_succeeded_worktrees=bool(
+            data.get("cleanup_succeeded_worktrees", False)
+        ),
         agent=AgentConfig(
             kind=str(agent_data.get("kind", "")),
             command=_require_string_list(agent_data, "command"),
@@ -121,4 +125,3 @@ def load_config(root: Path, path: Path | None = None) -> Config:
         ),
         gates=tuple(gates),
     )
-

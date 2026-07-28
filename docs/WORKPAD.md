@@ -27,6 +27,7 @@
 - [x] Run a live product reconciliation and preserve its failed adapter evidence.
 - [x] Fix Windows command resolution and terminalize startup exceptions.
 - [x] Add the automated controlled-English precheck and release boundary.
+- [x] Add semantic cleanup for successful worktrees.
 - [ ] Retry the live product reconciliation after the failed run lease expires.
 - [ ] Run the first bounded self-improvement experiment.
 - [ ] Add lease renewal, terminal cleanup reconciliation, and comparative
@@ -58,6 +59,7 @@
 | Secret containment and evidence redaction | Required | `process.py`, `orchestrator.py` | Environment and redaction negatives | SECURITY | Proven for configured and known forms |
 | Candidate immutability after verification | Required | `orchestrator.py`, `gitops.py` | Gate-mutation negative | README, architecture | Proven |
 | Isolated, fast-forward-only promotion | Required | `gitops.py` | Git integration tests | README, architecture | Proven |
+| Successful-worktree cleanup | Required | `gitops.py`, `orchestrator.py` | Clean removal and dirty preservation tests | README, architecture, SECURITY | Proven |
 | Bounded self-improvement | Required | normal work-item route | Pending | SPEC, architecture | Partial |
 | Automated controlled-English precheck | Required | `writing.py`, CLI gate | Writing precheck tests and live command | README, writing standard | Proven for limited automated scope |
 | Full STE claim requires human reviews | Required | repository policy and docs | Deterministic release labels | README, AGENTS, writing standard | Not released; human reviews unavailable |
@@ -66,9 +68,9 @@
 
 The first implementation slice provides a standard-library runtime and a
 Codex CLI adapter. The controller renews leases during long child processes,
-commits a candidate before evaluation, and rejects gate mutations. It preserves
-failed, stale, and manual-handoff worktrees. It does not yet clean terminal
-worktrees.
+commits a candidate before evaluation, and rejects gate mutations. It cleans a
+verified successful worktree after all semantic checks pass. It preserves
+failed, stale, and manual-handoff worktrees.
 
 The first live product run found a Windows command-resolution defect. Python
 selected a restricted app-package executable instead of the npm command shim.
@@ -96,11 +98,12 @@ Evidence recorded on 2026-07-28:
 | Dispatch claimed item | Base commit changes after claim | Mark stale without worktree | SQLite stale run and Git commit | `test_dispatch_stops_after_base_change` |
 | Start agent process | Executable does not exist | Preserve worktree and record terminal failure | SQLite failed run | `test_agent_startup_error_records_terminal_failure` |
 | Check configured Markdown | Long sentence or paragraph | Return a finding and block the gate | CLI and finding assertions | `test_writing.py` |
+| Clean successful worktree | Dirty worktree | Preserve uncertain content | Git registry and path assertions | `test_cleanup_preserves_dirty_successful_worktree` |
 
 Commands and outcomes:
 
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q`:
-  32 tests passed.
+  33 tests passed.
 - `python -m ruff check .`: passed.
 - `PYTHONPATH=src python -m autobuild writing-check`: no automated
   findings; final status remained `NOT RELEASED — COMPLIANCE CHECK INCOMPLETE`.
