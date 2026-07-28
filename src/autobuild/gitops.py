@@ -14,6 +14,10 @@ class GitError(RuntimeError):
     """A Git invariant or command failed."""
 
 
+class CandidateArtifactError(GitError):
+    """Candidate staging found a repository artifact that cannot be committed."""
+
+
 def _git(root: Path, *arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     process = subprocess.run(
         ("git", *arguments),
@@ -98,7 +102,9 @@ def commit_candidate(worktree: Worktree, message: str) -> str:
         if added_gitlinks:
             _git(worktree.path, "reset", "--mixed", "HEAD", "--")
             paths = ", ".join(added_gitlinks)
-            raise GitError(f"candidate adds nested Git repositories: {paths}")
+            raise CandidateArtifactError(
+                f"candidate adds nested Git repositories: {paths}"
+            )
         _git(worktree.path, "commit", "-m", message)
     return current_commit(worktree.path)
 

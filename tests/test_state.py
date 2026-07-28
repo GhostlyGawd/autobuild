@@ -252,6 +252,47 @@ def test_sqlite_rejects_quality_metric_tampering(tmp_path: Path) -> None:
     ) == (1, 1, 0, 1)
 
 
+def test_artifact_rejected_candidate_requires_bounded_evidence(
+    tmp_path: Path,
+) -> None:
+    store, controller = owned_store(tmp_path)
+    desired = specification(("task", 1))
+    store.sync_spec(desired, controller_lease=controller)
+    claim = store.claim_next(
+        desired, "base", 60, 3, controller_lease=controller
+    )
+    assert claim is not None
+    store.transition(
+        claim,
+        RunStatus.LEASED,
+        RunStatus.EXECUTING,
+        controller_lease=controller,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="artifact-rejected experiment evidence is invalid",
+    ):
+        store.record_experiment_candidate(
+            claim,
+            candidate_id="candidate-001",
+            ordinal=1,
+            worktree=tmp_path / "candidate",
+            candidate_commit="unsafe-commit",
+            status="evaluated",
+            classification="artifact-rejected",
+            gate_results={"test": True},
+            score=1,
+            all_pass=True,
+            non_regressing=True,
+            eligible=True,
+            quality=ChangeSurface(1, 1, 0, 1),
+            controller_lease=controller,
+        )
+
+    assert store.status()["candidate_rankings"] == []
+
+
 def test_restart_expires_lease_and_uses_higher_generation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

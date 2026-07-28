@@ -50,6 +50,10 @@ The controller applies these boundaries:
 - It uses fast-forward-only promotion.
 - It rejects a candidate that adds a Gitlink. Generated nested repositories
   cannot enter a candidate as submodules or block successful cleanup.
+- It classifies an unsafe self-improvement candidate as `artifact-rejected`.
+  The candidate receives no commit, gate execution, quality vector, eligibility,
+  or promotion authority. The controller preserves its worktree and continues
+  with later isolated candidates.
 - It selects at most one self-improvement candidate and requires that candidate
   to pass all gates without baseline regression or gate mutation.
 - It verifies the deterministic quality rank and selected candidate again in

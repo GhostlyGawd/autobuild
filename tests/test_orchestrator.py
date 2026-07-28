@@ -712,6 +712,214 @@ def test_self_improvement_ranks_candidates_and_promotes_deterministic_winner(
     ]
 
 
+def test_self_improvement_rejects_unsafe_candidate_and_promotes_later_candidate(
+    git_repository: Path,
+) -> None:
+    write_spec(git_repository, kind="self-improvement")
+    git(git_repository, "add", "SPEC.json")
+    git(git_repository, "commit", "-m", "request artifact-safe self improvement")
+    agent_code = """
+from pathlib import Path
+import subprocess
+
+candidate = Path.cwd().name.split("-", 1)[0]
+if candidate == "001":
+    nested = Path("generated-repository")
+    nested.mkdir()
+    subprocess.run(("git", "init"), cwd=nested, check=True)
+    subprocess.run(
+        ("git", "config", "user.name", "Autobuild Test"),
+        cwd=nested,
+        check=True,
+    )
+    subprocess.run(
+        ("git", "config", "user.email", "autobuild@example.invalid"),
+        cwd=nested,
+        check=True,
+    )
+    (nested / "generated.txt").write_text("generated\\n")
+    subprocess.run(("git", "add", "generated.txt"), cwd=nested, check=True)
+    subprocess.run(
+        ("git", "commit", "-m", "generated repository"),
+        cwd=nested,
+        check=True,
+    )
+else:
+    Path("valid.txt").write_text("valid\\n")
+"""
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(
+            git_repository,
+            gate_exit=0,
+            agent_code=agent_code,
+            max_candidates=2,
+        ),
+    )
+
+    outcome = orchestrator.reconcile_once()
+
+    assert outcome.status == "succeeded", outcome.detail
+    assert (git_repository / "valid.txt").read_text(encoding="utf-8") == "valid\n"
+    state = orchestrator.store.status()
+    rankings = sorted(state["candidate_rankings"], key=lambda row: row["rank"])
+    assert [row["candidate_id"] for row in rankings] == [
+        "candidate-002",
+        "candidate-001",
+    ]
+    winner, rejected = rankings
+    assert winner["eligible"]
+    assert winner["selected"]
+    assert not Path(winner["worktree"]).exists()
+    assert rejected["status"] == "rejected"
+    assert rejected["classification"] == "artifact-rejected"
+    assert rejected["candidate_commit"] is None
+    assert rejected["gate_results"] == {"result": None}
+    assert rejected["score"] == 0
+    assert not rejected["all_pass"]
+    assert not rejected["non_regressing"]
+    assert not rejected["eligible"]
+    assert not rejected["selected"]
+    assert rejected["changed_files"] is None
+    assert rejected["insertions"] is None
+    assert rejected["deletions"] is None
+    assert rejected["changed_lines"] is None
+    rejected_worktree = Path(rejected["worktree"])
+    assert rejected_worktree.exists()
+    assert (rejected_worktree / "generated-repository").exists()
+    assert state["promotion_decisions"][0]["candidate_id"] == "candidate-002"
+    assert state["promotion_decisions"][0]["decision"] == "promoted"
+    connection = sqlite3.connect(orchestrator.config.state_path)
+    event_rows = connection.execute(
+        """
+        SELECT kind, payload_json FROM events
+        WHERE run_id = ? AND kind IN (
+            'candidate_artifact_rejected',
+            'gate_finished',
+            'self_improvement_evaluated'
+        )
+        ORDER BY sequence
+        """,
+        (outcome.run_id,),
+    ).fetchall()
+    connection.close()
+    events = [(kind, json.loads(payload)) for kind, payload in event_rows]
+    assert (
+        "candidate_artifact_rejected",
+        {
+            "candidate_id": "candidate-001",
+            "classification": "artifact-rejected",
+        },
+    ) in events
+    assert {
+        payload["candidate_id"]
+        for kind, payload in events
+        if kind in {"gate_finished", "self_improvement_evaluated"}
+    } == {"candidate-002"}
+
+
+def test_all_artifact_rejected_candidates_preserve_evidence_without_promotion(
+    git_repository: Path,
+) -> None:
+    write_spec(git_repository, kind="self-improvement")
+    git(git_repository, "add", "SPEC.json")
+    git(git_repository, "commit", "-m", "request artifact-safe self improvement")
+    agent_code = """
+from pathlib import Path
+import subprocess
+
+nested = Path("generated-repository")
+nested.mkdir()
+subprocess.run(("git", "init"), cwd=nested, check=True)
+subprocess.run(
+    ("git", "config", "user.name", "Autobuild Test"),
+    cwd=nested,
+    check=True,
+)
+subprocess.run(
+    ("git", "config", "user.email", "autobuild@example.invalid"),
+    cwd=nested,
+    check=True,
+)
+(nested / "generated.txt").write_text("generated\\n")
+subprocess.run(("git", "add", "generated.txt"), cwd=nested, check=True)
+subprocess.run(
+    ("git", "commit", "-m", "generated repository"),
+    cwd=nested,
+    check=True,
+)
+"""
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(
+            git_repository,
+            gate_exit=0,
+            agent_code=agent_code,
+            max_candidates=2,
+        ),
+    )
+    base = current_commit(git_repository)
+
+    outcome = orchestrator.reconcile_once()
+
+    assert outcome.status == "failed"
+    assert outcome.detail == "no eligible self-improvement candidate"
+    assert current_commit(git_repository) == base
+    durable_state = Orchestrator(
+        git_repository,
+        orchestrator.config,
+    ).store.status()
+    rankings = sorted(
+        durable_state["candidate_rankings"],
+        key=lambda row: row["rank"],
+    )
+    assert len(rankings) == 2
+    assert [row["candidate_id"] for row in rankings] == [
+        "candidate-001",
+        "candidate-002",
+    ]
+    assert all(row["status"] == "rejected" for row in rankings)
+    assert all(row["classification"] == "artifact-rejected" for row in rankings)
+    assert all(row["candidate_commit"] is None for row in rankings)
+    assert all(row["gate_results"] == {"result": None} for row in rankings)
+    assert all(row["score"] == 0 for row in rankings)
+    assert all(not row["eligible"] and not row["selected"] for row in rankings)
+    assert all(row["changed_lines"] is None for row in rankings)
+    assert all(Path(row["worktree"]).exists() for row in rankings)
+    assert all(
+        (Path(row["worktree"]) / "generated-repository").exists()
+        for row in rankings
+    )
+    assert durable_state["promotion_decisions"][0]["decision"] == (
+        "no-eligible-candidate"
+    )
+    assert durable_state["promotion_decisions"][0]["candidate_id"] is None
+    assert durable_state["promotion_intents"] == []
+    connection = sqlite3.connect(orchestrator.config.state_path)
+    event_rows = connection.execute(
+        """
+        SELECT kind, payload_json FROM events
+        WHERE run_id = ? AND kind IN (
+            'candidate_artifact_rejected',
+            'gate_finished',
+            'self_improvement_evaluated'
+        )
+        ORDER BY sequence
+        """,
+        (outcome.run_id,),
+    ).fetchall()
+    connection.close()
+    events = [(kind, json.loads(payload)) for kind, payload in event_rows]
+    assert [kind for kind, _payload in events] == [
+        "candidate_artifact_rejected",
+        "candidate_artifact_rejected",
+    ]
+    assert [payload["candidate_id"] for _kind, payload in events] == [
+        "candidate-001",
+        "candidate-002",
+    ]
+
+
 def test_self_improvement_ranks_unequal_quality_before_candidate_id(
     git_repository: Path,
 ) -> None:

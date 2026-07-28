@@ -9,8 +9,11 @@ flowchart LR
     D[(SQLite<br/>controller/run leases<br/>and evidence)] <--> R
     R -->|fenced claim| W[One isolated worktree<br/>per candidate]
     W --> A[Bounded agent process]
-    A --> C[Candidate commits]
-    C --> E[Verification gates<br/>per candidate]
+    A --> C[Candidate staging]
+    C --> X{Added Gitlink?}
+    X -->|no| M[Candidate commit]
+    M --> E[Verification gates<br/>per candidate]
+    X -->|yes| J[Bounded artifact rejection<br/>and preserved worktree]
     A -. heartbeat .-> Q{Controller, SPEC, Git,<br/>generations, and leases current?}
     E -. heartbeat .-> Q
     Q -->|no: stop child| H
@@ -32,10 +35,15 @@ of isolated candidate worktrees. An agent changes each worktree. Verification
 gates evaluate each committed change. The controller ranks self-improvement
 candidates before it selects at most one candidate.
 
-The controller rejects a gate that changes the candidate. It reads the SPEC and
-base Git commit again. It stores an immutable intent before it promotes an
-unchanged, verified, fast-forward candidate. It preserves failed or stale
-candidates.
+Before a candidate commit, the controller rejects each newly added Gitlink. A
+rejected self-improvement candidate cannot run gates, receive a quality vector,
+be eligible, or reach promotion. The controller preserves its worktree and
+continues later isolated candidates.
+
+The controller also rejects a gate that
+changes a committed candidate. It reads the SPEC and base Git commit again. It
+stores an immutable intent before it promotes an unchanged, verified,
+fast-forward candidate. It preserves failed or stale candidates.
 
 Diagram provenance: generated for `autobuild` from the repository lifecycle
 contract on 2026-07-28. The Mermaid source in this file is the authoritative
@@ -132,6 +140,13 @@ paths and rejects Gitlinks. This check keeps generated nested repositories out
 of candidate history. It also prevents those repositories from making Git
 treat the successful worktree as a worktree that contains submodules.
 
+For self-improvement, this rejection has the bounded
+`artifact-rejected` classification. SQLite records a rejected candidate with
+null gate results, no candidate commit, no quality vector, and no eligibility.
+The controller preserves that worktree and continues the remaining isolated
+candidates. If all candidates are rejected, the run records
+`no-eligible-candidate` and does not create promotion intent.
+
 After the gates, the controller measures each committed candidate against the
 claimed base with Git `--numstat`. The quality vector contains changed files,
 insertions, deletions, and changed lines. Changed lines equal insertions plus
@@ -190,8 +205,8 @@ commit reachability, and Git worktree registration. A failed cleanup preserves
 the worktree and records terminal evidence.
 
 For a ranked self-improvement run, automatic cleanup applies only to the
-promoted winner. The controller preserves non-winning and failed candidate
-worktrees until a separate semantic cleanup decision exists.
+promoted winner. The controller preserves non-winning, rejected, and failed
+candidate worktrees until a separate semantic cleanup decision exists.
 
 When automatic promotion is disabled, a verified candidate enters a stable
 `awaiting-promotion` state. The work item becomes blocked, and lease expiry does

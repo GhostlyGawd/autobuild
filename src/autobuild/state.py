@@ -884,6 +884,18 @@ class StateStore:
             raise ValueError("experiment quality requires a candidate commit")
         if status == "evaluated" and quality is None:
             raise ValueError("evaluated experiment requires a quality vector")
+        if classification == "artifact-rejected" and not (
+            status == "rejected"
+            and candidate_commit is None
+            and quality is None
+            and bool(gate_results)
+            and all(result is None for result in gate_results.values())
+            and score == 0
+            and not all_pass
+            and not non_regressing
+            and not eligible
+        ):
+            raise ValueError("artifact-rejected experiment evidence is invalid")
         if eligible and not (
             all_pass
             and non_regressing

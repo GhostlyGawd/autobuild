@@ -76,14 +76,14 @@
     {
       "resource": "Self-improvement quality evidence",
       "owner": "Committed Git comparison and constrained SQLite records",
-      "failure_domain": "A worker or controller value cannot define its own rank or promotion decision",
-      "authority_loss_behavior": "Reject an inconsistent quality vector, nondeterministic rank, or promotion decision that does not refer to the selected commit"
+      "failure_domain": "A generated nested repository or worker-supplied value cannot define eligibility, rank, or promotion",
+      "authority_loss_behavior": "Reject each added Gitlink before a candidate commit; record bounded rejection evidence without gates or quality; preserve the worktree; continue later candidates; and reject an inconsistent quality vector, rank, or promotion decision"
     }
   ],
   "reconciliation": {
     "observation": "Load the current SPEC, Git commit, controller lease, work items, runs, leases, immutable promotion intents, and event history",
     "comparison": "Acquire current controller ownership, reconcile one unresolved promotion intent, then find an eligible desired item that has no current run and remains below its attempt limit",
-    "action": "Recover only an exact already-applied promotion under current SPEC authority, or renew controller ownership, create a generation-fenced run, isolate one worktree for product work or a bounded set for self-improvement, execute each agent, evaluate gates, measure each committed candidate against the claimed Git base, rank eligible self-improvement candidates by the verified quality vectors, revalidate, store immutable intent, and promote at most one candidate inside the controller-owned operation boundary",
+    "action": "Recover only an exact already-applied promotion under current SPEC authority, or renew controller ownership, create a generation-fenced run, isolate one worktree for product work or a bounded set for self-improvement, execute each agent, reject candidate-local Gitlinks before commit, continue later candidates, evaluate gates only for committed candidates, measure committed candidates against the claimed Git base, rank eligible self-improvement candidates by verified quality vectors, revalidate, store immutable intent, and promote at most one candidate inside the controller-owned operation boundary",
     "repeat_condition": "Repeat while eligible work exists; re-observe after each state change, restart, timeout, or external change"
   },
   "dispatch_revalidation": {
@@ -120,7 +120,7 @@
   "preservation_cleanup": [
     {
       "semantic_condition": "The run is executing, evaluating, promoting, recovered, failed, or stale",
-      "artifact_action": "Preserve each worktree, candidate commit, gate vector, Git change-surface vector, ranking, promotion intent, decision, and result summary",
+      "artifact_action": "Preserve each worktree, bounded artifact-rejection record, candidate commit, gate vector, Git change-surface vector, ranking, promotion intent, decision, and result summary",
       "revalidation": "Read the durable run state before any future cleanup"
     },
     {
@@ -234,7 +234,7 @@
       "retry_timeout": "A current heartbeat renews controller and run leases; gate timeout or authority loss stops the child and fails or stales the run",
       "restart": "An expired lease makes the run stale; preserve results",
       "disposal": "Preserve gate output, committed quality vectors, deterministic ranks, and the promotion decision",
-      "proof": "test_gate_failure_prevents_promotion, test_self_improvement_ranks_candidates_and_promotes_deterministic_winner, test_self_improvement_ranks_unequal_quality_before_candidate_id, test_quality_metric_tampering_prevents_ranking_and_promotion, test_self_improvement_candidate_timeout_prevents_promotion, test_active_agent_stops_after_spec_authority_loss, and test_active_agent_stops_after_base_commit_authority_loss"
+      "proof": "test_gate_failure_prevents_promotion, test_self_improvement_ranks_candidates_and_promotes_deterministic_winner, test_self_improvement_rejects_unsafe_candidate_and_promotes_later_candidate, test_all_artifact_rejected_candidates_preserve_evidence_without_promotion, test_self_improvement_ranks_unequal_quality_before_candidate_id, test_quality_metric_tampering_prevents_ranking_and_promotion, test_self_improvement_candidate_timeout_prevents_promotion, test_active_agent_stops_after_spec_authority_loss, and test_active_agent_stops_after_base_commit_authority_loss"
     },
     {
       "name": "promoting",
@@ -416,6 +416,20 @@
       "failure_injection": "Exhaust each candidate budget before candidate commit and gates",
       "expected_semantic_outcome": "Both candidates time out, no candidate is eligible, and Git promotion does not occur",
       "durable_evidence": "Two timed-out candidate rows, zero scores, deterministic ranks, no-eligible-candidate decision, and unchanged base commit"
+    },
+    {
+      "sequence": "create one unsafe self-improvement candidate followed by one valid isolated candidate",
+      "transition": "candidate-local artifact rejection through deterministic ranking, promotion, and success",
+      "failure_injection": "Make candidate-001 add a nested Git repository and make candidate-002 add a valid file",
+      "expected_semantic_outcome": "Candidate-001 receives no commit, gates, quality, eligibility, or cleanup; candidate-002 completes and wins",
+      "durable_evidence": "Bounded artifact-rejected event and row, null gate and quality evidence, preserved rejected worktree, selected valid candidate, and promoted commit"
+    },
+    {
+      "sequence": "make every isolated self-improvement candidate add a nested Git repository",
+      "transition": "candidate-local artifact rejections through ranked evaluation to failed",
+      "failure_injection": "Add one Gitlink in each candidate before staging",
+      "expected_semantic_outcome": "Every candidate is rejected, no gates run, no quality vector or promotion intent exists, and Git does not change",
+      "durable_evidence": "Two artifact-rejected rows and events, deterministic ranks, no-eligible-candidate decision, unchanged base commit, and preserved worktrees"
     },
     {
       "sequence": "achieve one item, add an unrelated item, then change the achieved item",

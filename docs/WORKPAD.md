@@ -39,6 +39,7 @@
 - [x] Add bounded multi-candidate experiment ranking and promotion decisions.
 - [x] Add deterministic Git change-surface quality evidence.
 - [x] Reconcile interrupted local Git promotions.
+- [x] Make unsafe repository artifacts candidate-local and ineligible.
 
 ## Acceptance criteria
 
@@ -76,6 +77,7 @@
 | Ranked self-improvement experiments | Required | `config.py`, `orchestrator.py`, `state.py` | Multi-candidate tie-break and candidate-timeout lifecycle tests | README, architecture, security, lifecycle contract | Proven for fan-out, eligibility, and preservation; quality ranking is below |
 | Git change-surface quality ranking | Required | `models.py`, `gitops.py`, `orchestrator.py`, `state.py` | Git metric, tampering, unequal-quality, exact-tie, and legacy-status tests | README, architecture, security, lifecycle contract | Promoted after three-candidate dogfood; live quality ordering remains pending |
 | Promotion crash recovery | Required | immutable intent and fenced recovery in `state.py` and `orchestrator.py`; existing exact Git observations in `gitops.py` | before-Git, after-Git, post-success, divergence, stale-authority, stale-controller, and idempotent-restart tests | SPEC, README, architecture, SECURITY, lifecycle contract | Worker implementation proven; live dogfood remains pending |
+| Artifact-safe candidate eligibility | Required | typed staging rejection in `gitops.py`; candidate-local disposition in `orchestrator.py`; bounded evidence validation in `state.py` | multiple-Gitlink staging, one-unsafe-one-valid, all-unsafe, and invalid-evidence tests | SPEC, README, architecture, SECURITY, lifecycle contract | Worker implementation and focused failure injection proven; live dogfood remains pending |
 | Automated controlled-English precheck | Required | `writing.py`, CLI gate | Writing precheck tests and live command | README, writing standard | Proven for limited automated scope |
 | Full STE claim requires human reviews | Required | repository policy and docs | Deterministic release labels | README, AGENTS, writing standard | Not released; human reviews unavailable |
 
@@ -405,6 +407,8 @@ Evidence recorded on 2026-07-28:
 | Rank unequal quality | Eligible candidates have unequal line and file counts | Rank fewer lines first and fewer files second | Quality vectors, ranks, selection, and promoted commit | `test_self_improvement_ranks_unequal_quality_before_candidate_id` |
 | Record tampered metric | Changed lines differ from insertions plus deletions | Reject the vector before ranking or promotion | Failed run, SQLite constraint, absent rank, and absent decision | `test_quality_metric_tampering_prevents_ranking_and_promotion`, `test_sqlite_rejects_quality_metric_tampering` |
 | Exhaust candidate budgets | Both agents exceed the per-candidate duration | Record complete not-run gate vectors and refuse promotion | Timed-out candidate rows, rankings, no-eligible decision, and unchanged Git | `test_self_improvement_candidate_timeout_prevents_promotion` |
+| Stage one unsafe and one valid candidate | Candidate 1 adds a nested repository | Reject candidate 1 without gates or quality, continue candidate 2, and promote only candidate 2 | Bounded rejection event and row, preserved rejected worktree, valid quality vector, selection, and promotion | `test_self_improvement_rejects_unsafe_candidate_and_promotes_later_candidate` |
+| Stage only unsafe candidates | Every candidate adds a nested repository | Reject all candidates and refuse promotion | Bounded rejection rows and events, null gate and quality evidence, deterministic ranks, no intent, unchanged Git, and preserved worktrees | `test_all_artifact_rejected_candidates_preserve_evidence_without_promotion` |
 | Exceed experiment policy | Candidate count, one-candidate timeout, or aggregate candidate-seconds exceed a hard ceiling | Reject configuration before dispatch | Configuration error assertions | `test_config_requires_bounded_self_improvement_policy` |
 | Record experiment evidence | Run generation differs | Reject the candidate evidence mutation | Empty candidate ranking projection | `test_stale_generation_cannot_change_experiment_evidence` |
 | Read legacy database | Experiment tables or only the quality table are absent | Return available legacy evidence with null quality fields and do not migrate state | Empty or preserved projections and unchanged SQLite schema | `test_status_reads_state_without_experiment_tables`, `test_status_preserves_legacy_experiment_evidence_before_migration` |
@@ -732,6 +736,43 @@ Artifact-safe candidate eligibility alignment and plan recorded on 2026-07-28:
 - The owner's standing autonomous-build direction satisfies the direction and
   implementation approval gates for this bounded local change.
 
+Artifact-safe candidate eligibility implementation evidence recorded on
+2026-07-28:
+
+- Required conflict repaired: a Gitlink staging failure no longer escapes the
+  self-improvement candidate boundary and aborts later candidates.
+- Implementation-defined omission repaired: SQLite now validates the bounded
+  `artifact-rejected` evidence shape. The rejected row has no candidate commit,
+  gate execution, quality vector, eligibility, or selection authority.
+- Required cleanup behavior proven: the controller cleans only the promoted
+  winner. It preserves each rejected worktree and its nested repository.
+- Failure injection proves one unsafe candidate followed by one valid winner.
+  It also proves that an all-unsafe run records `no-eligible-candidate`, creates
+  no promotion intent, and does not change Git.
+- Documentation-only drift repaired: README, SECURITY, architecture, lifecycle
+  failure boundaries, failure-injection evidence, and this workpad now describe
+  candidate-local artifact rejection and preservation.
+- Reviewed and unaffected: `SPEC.json` already defines the exact outcome and
+  acceptance criteria. Configuration, setup commands, agent adapters, versions,
+  licensing, provenance, releases, and external integrations do not change.
+- The four new or extended acceptance tests passed.
+- The focused Git, state, and orchestrator suite passed all 50 tests.
+- The complete isolated suite passed all 68 tests.
+- Ruff and `git diff --check` passed.
+- Repository validation passed configuration, SPEC, executable, and Draft
+  2020-12 lifecycle-contract checks with `--skip-git-clean`. Exact validation
+  reported only the expected dirty-tree failure because this bounded worker
+  must leave the candidate uncommitted.
+- The writing precheck found no automated findings and retained
+  `NOT RELEASED — COMPLIANCE CHECK INCOMPLETE`.
+- Codeweb mapping, pre-edit context, similarity, placement, refresh, and diff
+  calls were unavailable because the local tool calls were cancelled. Direct
+  call-site review, the complete lifecycle suite, Ruff, schema validation, and
+  diff checks provide the available structural evidence.
+- Pytest emitted the known ignored Windows permission warning while its
+  process-exit cleanup inspected an ambient temporary-directory link. The test
+  command returned success and did not change repository files.
+
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
 autoloading. A fresh project virtual environment remains the supported setup.
@@ -761,9 +802,11 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: promotion crash recovery is promoted, reviewed, and pushed.
-Artifact-safe candidate eligibility is the active desired-state item.
+Status: artifact-safe candidate eligibility is implemented and validated in the
+bounded worker worktree. The changes remain uncommitted for controller
+evaluation.
 
-Next owner and action: push this desired-state checkpoint, then run the bounded
-three-candidate self-improvement reconciliation. A later controlled
-failure-injection run must still provide live restart recovery evidence.
+Next owner and action: the controller can evaluate and promote this candidate.
+A later bounded self-improvement run must still provide live artifact-rejection
+dogfood evidence. A later controlled failure-injection run must also provide
+live restart-recovery evidence.

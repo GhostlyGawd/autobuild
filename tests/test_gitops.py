@@ -6,6 +6,7 @@ import pytest
 from conftest import git
 
 from autobuild.gitops import (
+    CandidateArtifactError,
     GitError,
     cleanup_succeeded_worktree,
     commit_candidate,
@@ -95,20 +96,30 @@ def test_candidate_commit_rejects_nested_git_repository(
         "task",
         base,
     )
-    nested = worktree.path / "generated-repository"
-    nested.mkdir()
-    git(nested, "init")
-    git(nested, "config", "user.name", "Autobuild Test")
-    git(nested, "config", "user.email", "autobuild@example.invalid")
-    (nested / "generated.txt").write_text("generated\n", encoding="utf-8")
-    git(nested, "add", "generated.txt")
-    git(nested, "commit", "-m", "generated repository")
+    nested_paths = [
+        worktree.path / "generated-repository",
+        worktree.path / "second-generated-repository",
+    ]
+    for nested in nested_paths:
+        nested.mkdir()
+        git(nested, "init")
+        git(nested, "config", "user.name", "Autobuild Test")
+        git(nested, "config", "user.email", "autobuild@example.invalid")
+        (nested / "generated.txt").write_text("generated\n", encoding="utf-8")
+        git(nested, "add", "generated.txt")
+        git(nested, "commit", "-m", "generated repository")
 
-    with pytest.raises(GitError, match="candidate adds nested Git repositories"):
+    with pytest.raises(
+        CandidateArtifactError,
+        match=(
+            "candidate adds nested Git repositories: "
+            "generated-repository, second-generated-repository"
+        ),
+    ):
         commit_candidate(worktree, "candidate")
 
     assert current_commit(worktree.path) == base
-    assert nested.exists()
+    assert all(nested.exists() for nested in nested_paths)
 
 
 def test_cleanup_preserves_dirty_successful_worktree(git_repository: Path) -> None:

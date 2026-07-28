@@ -12,6 +12,7 @@ from pathlib import Path
 from .agent import run_agent
 from .config import Config, load_config
 from .gitops import (
+    CandidateArtifactError,
     GitError,
     Worktree,
     cleanup_succeeded_worktree,
@@ -393,14 +394,49 @@ class Orchestrator:
                         worktree.path,
                     )
 
-                experiment.agent_passed = True
                 revalidate_authority()
-                experiment.candidate_commit = commit_candidate(
-                    worktree,
-                    f"autobuild: complete {claim.work_item.id} ({candidate_id})"
-                    if is_self_improvement
-                    else f"autobuild: complete {claim.work_item.id}",
-                )
+                try:
+                    experiment.candidate_commit = commit_candidate(
+                        worktree,
+                        f"autobuild: complete {claim.work_item.id} ({candidate_id})"
+                        if is_self_improvement
+                        else f"autobuild: complete {claim.work_item.id}",
+                    )
+                except CandidateArtifactError:
+                    if not is_self_improvement:
+                        raise
+                    revalidate_authority()
+                    experiment.classification = "artifact-rejected"
+                    experiment.gate_results = {
+                        gate.name: None for gate in self.config.gates
+                    }
+                    self.store.record_experiment_candidate(
+                        claim,
+                        candidate_id=candidate_id,
+                        ordinal=ordinal,
+                        worktree=worktree.path,
+                        candidate_commit=None,
+                        status="rejected",
+                        classification=experiment.classification,
+                        gate_results=experiment.gate_results,
+                        score=0,
+                        all_pass=False,
+                        non_regressing=False,
+                        eligible=False,
+                        quality=None,
+                        controller_lease=controller_lease,
+                    )
+                    self.store.record_event(
+                        claim,
+                        "candidate_artifact_rejected",
+                        {
+                            "candidate_id": candidate_id,
+                            "classification": experiment.classification,
+                        },
+                        controller_lease=controller_lease,
+                    )
+                    continue
+                experiment.agent_passed = True
                 revalidate_authority()
 
             self.store.transition(

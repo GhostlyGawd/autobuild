@@ -27,7 +27,9 @@ but the project is not production-ready.
   is lost.
 - Runs agents in isolated Git worktrees.
 - Commits a candidate before it runs verification gates.
-- Rejects newly added Gitlinks before it creates a candidate commit.
+- Rejects newly added Gitlinks before it creates a candidate commit. A rejected
+  self-improvement candidate keeps bounded evidence and its worktree. It cannot
+  run gates or receive a quality vector, and later candidates continue.
 - Runs verification gates without a command shell.
 - Decodes child output as UTF-8 with replacement and retains bounded text.
 - Gives Python gates the candidate `src` path and disables ambient pytest
