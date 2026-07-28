@@ -38,6 +38,7 @@
 - [x] Add a renewable controller ownership lease.
 - [x] Add bounded multi-candidate experiment ranking and promotion decisions.
 - [x] Add deterministic Git change-surface quality evidence.
+- [ ] Reconcile interrupted local Git promotions.
 
 ## Acceptance criteria
 
@@ -74,6 +75,7 @@
 | Measured self-improvement comparison | Required | baseline and candidate vectors with pass deltas | Improvement and unchanged-failure tests | README, SPEC, architecture, lifecycle contract | Promoted in `3a13e08` |
 | Ranked self-improvement experiments | Required | `config.py`, `orchestrator.py`, `state.py` | Multi-candidate tie-break and candidate-timeout lifecycle tests | README, architecture, security, lifecycle contract | Proven for fan-out, eligibility, and preservation; quality ranking is below |
 | Git change-surface quality ranking | Required | `models.py`, `gitops.py`, `orchestrator.py`, `state.py` | Git metric, tampering, unequal-quality, exact-tie, and legacy-status tests | README, architecture, security, lifecycle contract | Promoted after three-candidate dogfood; live quality ordering remains pending |
+| Promotion crash recovery | Required | planned `state.py`, `orchestrator.py`, and `gitops.py` changes | planned crash-window and restart matrix | SPEC, README, architecture, SECURITY, lifecycle contract | Desired; not implemented |
 | Automated controlled-English precheck | Required | `writing.py`, CLI gate | Writing precheck tests and live command | README, writing standard | Proven for limited automated scope |
 | Full STE claim requires human reviews | Required | repository policy and docs | Deterministic release labels | README, AGENTS, writing standard | Not released; human reviews unavailable |
 
@@ -246,6 +248,73 @@ Alignment review for `quality-aware-ranking`:
   `test_status_preserves_legacy_experiment_evidence_before_migration` prove
   the read-only fallbacks, preserved rank and selection, preserved promotion
   decision, and absence of an implicit schema mutation.
+
+Alignment and plan contract for `promotion-crash-recovery`:
+
+- Current workflow: the persistent controller stores `promoting`, fast-forwards
+  the base repository, then records run success and the final promotion
+  decision. A process crash after Git succeeds but before SQLite finalization
+  leaves durable systems in disagreement.
+- Present problem: lease expiry can mark that run stale and return the work
+  item to ready even though the intended candidate is already the base commit.
+  A later controller can duplicate work and the promotion decision can remain
+  incomplete.
+- Direction and benefit: store an immutable promotion intent before the Git
+  boundary. A replacement controller uses that intent, current SPEC, current
+  Git, and a fresh controller lease to finalize the exact already-applied
+  commit once. Autonomous progress then survives this crash without owner
+  recovery work or an unsafe overwrite.
+- The existing approach remains sufficient when the controller cannot crash
+  during promotion. The added state is justified because this harness is
+  explicitly long-running and autonomous.
+- Alternatives rejected: doing nothing preserves the inconsistency window.
+  A distributed transaction coordinator adds an external system with no
+  current consumer and cannot make local Git and SQLite one atomic resource.
+- Authority: `SPEC.json` owns the desired outcome, Git owns applied source,
+  SQLite owns the immutable intent and lifecycle, and the current controller
+  lease owns recovery mutation. Current SPEC and Git observations take
+  precedence over stale intent.
+- State contract:
+  - Expected base still current after a pre-Git crash: expire the run to
+    retryable state and preserve the worktree.
+  - Base equals the intended candidate after a post-Git crash: finalize the
+    run, achievement, and promotion decision exactly once.
+  - Base is an unrelated commit or SPEC authority changed: do not overwrite
+    source; record a bounded stale or conflict outcome and preserve evidence.
+  - Run is already successful but its decision is incomplete: repair only the
+    matching decision; repeated recovery has no additional effect.
+- Planned responsibilities: `state.py` owns intent schema, immutability,
+  fenced reconciliation, and status. `orchestrator.py` records intent before
+  Git and invokes recovery before new claims. `gitops.py` supplies exact commit
+  checks. State, Git, and orchestrator tests own the crash matrix.
+- Required proof: inject crashes before Git, after Git, and after run success;
+  inject unrelated base movement and stale controller authority; restart more
+  than once; prove no duplicate promotion, no overwrite, exact achievement,
+  repaired self-improvement decision, and preserved uncertain worktrees.
+- Live proof: the next three-candidate self-improvement run must select with
+  committed Git change-surface evidence. It can prove normal promotion intent
+  behavior, but synthetic crash injections remain the authoritative evidence
+  for process-death windows.
+- In scope: local fast-forward promotion and local SQLite recovery. Out of
+  scope: remote push, distributed controllers, external transaction services,
+  automatic continuation of a pre-Git candidate, and cleanup of uncertain
+  preserved worktrees.
+- Documentation impact: implementation must reconcile README, architecture and
+  its control-flow visual, SECURITY, lifecycle evidence, the alignment table,
+  and dated live evidence. Setup, adapter, writing-release, license,
+  provenance, contribution, and support claims are reviewed but are not
+  expected to change.
+- The owner explicitly delegated direction and implementation authority to the
+  orchestrator for this build. That standing decision approves this bounded
+  direction and plan contract.
+- Desired-state checkpoint evidence recorded on 2026-07-28: the focused SPEC,
+  state, and validation suite passed all 20 tests; repository validation
+  accepted 7 work items and the lifecycle schema; the writing precheck found
+  no automated findings and retained its non-release label.
+- Reviewed and unaffected at this checkpoint: runtime, configuration, setup,
+  adapter, security, architecture, visuals, lifecycle behavior, examples,
+  version, readiness, license, provenance, contribution, and support claims do
+  not change until a candidate is promoted.
 
 ## Implementation progress
 
@@ -578,9 +647,9 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: quality-aware ranking is promoted and pushed. Primary review repaired
-the pre-migration read-only status projection.
+Status: quality-aware ranking is promoted, reviewed, and pushed. Promotion
+crash recovery is the next approved desired-state item.
 
-Next owner and action: complete the full post-review gates, then add
-crash-safe promotion reconciliation as the next desired-state item. That live
-self-improvement run must also exercise the new Git change-surface ordering.
+Next owner and action: push this desired-state checkpoint, then run the
+three-candidate self-improvement reconciliation. Inspect both the new quality
+ordering and the crash-recovery semantics before promotion handoff.

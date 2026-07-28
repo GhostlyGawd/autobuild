@@ -82,6 +82,19 @@
         "SQLite verifies and preserves each quality vector, deterministic rank, and promotion decision.",
         "Failure-injection tests prove metric tampering, unequal quality, and exact tie behavior."
       ]
+    },
+    {
+      "id": "promotion-crash-recovery",
+      "kind": "self-improvement",
+      "priority": 60,
+      "objective": "Reconcile a local Git promotion that completed before its SQLite success state was finalized.",
+      "acceptance": [
+        "The controller stores an immutable promotion intent with the run, expected base, candidate commit, worktree, and SPEC authority before fast-forwarding Git.",
+        "A replacement controller finalizes an interrupted run exactly once when the base repository is already at the intended candidate commit and authority is still current.",
+        "A crash before Git changes the base leaves the run retryable and preserves its worktree; an unrelated base commit prevents recovery and is never overwritten.",
+        "Recovery repairs the work-item achievement and self-improvement promotion decision without accepting a stale controller mutation.",
+        "Failure-injection tests prove the before-Git, after-Git, post-success, divergence, stale-authority, and idempotent-restart cases."
+      ]
     }
   ]
 }
