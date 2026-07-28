@@ -103,6 +103,44 @@ def test_stale_generation_cannot_transition(tmp_path: Path) -> None:
     assert store.status()["recent_runs"][0]["status"] == RunStatus.LEASED.value
 
 
+def test_stale_generation_cannot_change_experiment_evidence(
+    tmp_path: Path,
+) -> None:
+    store, controller = owned_store(tmp_path)
+    desired = specification(("task", 1))
+    store.sync_spec(desired, controller_lease=controller)
+    claim = store.claim_next(
+        desired, "base", 60, 3, controller_lease=controller
+    )
+    assert claim is not None
+    store.transition(
+        claim,
+        RunStatus.LEASED,
+        RunStatus.EXECUTING,
+        controller_lease=controller,
+    )
+    stale_claim = replace(claim, generation=claim.generation + 1)
+
+    with pytest.raises(StaleLeaseError):
+        store.record_experiment_candidate(
+            stale_claim,
+            candidate_id="candidate-001",
+            ordinal=1,
+            worktree=tmp_path / "candidate",
+            candidate_commit="candidate",
+            status="evaluated",
+            classification="non-regression",
+            gate_results={"test": True},
+            score=1,
+            all_pass=True,
+            non_regressing=True,
+            eligible=True,
+            controller_lease=controller,
+        )
+
+    assert store.status()["candidate_rankings"] == []
+
+
 def test_restart_expires_lease_and_uses_higher_generation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -363,6 +401,8 @@ def test_status_does_not_create_or_require_controller_ownership(
         "controller_lease": None,
         "work_items": [],
         "recent_runs": [],
+        "candidate_rankings": [],
+        "promotion_decisions": [],
     }
     assert not store.path.exists()
 

@@ -16,6 +16,10 @@ The controller applies these boundaries:
 - It redacts inherited secret values and common credential forms before it
   writes agent or gate output to durable events.
 - It isolates agent edits in a Git worktree.
+- It bounds self-improvement candidate count and combined child-process time
+  through local configuration.
+- It creates each self-improvement candidate from the claimed base commit in a
+  separate worktree.
 - It acquires one renewable controller owner token and generation for the state
   database and resolved base repository before scheduling mutations.
 - It rejects controller state mutations when the owner token, repository,
@@ -31,6 +35,8 @@ The controller applies these boundaries:
 - It stops the child process, makes the run stale, and records one bounded
   authority-loss cause if a heartbeat check fails.
 - It uses fast-forward-only promotion.
+- It selects at most one self-improvement candidate and requires that candidate
+  to pass all gates without baseline regression or gate mutation.
 - It preserves failed worktrees for inspection.
 - It records an agent-startup or controller exception as a terminal failed run
   when the current lease still has authority.

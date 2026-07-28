@@ -36,7 +36,7 @@
 - [x] Stop active children after desired-state or base-source authority loss.
 - [x] Make malformed child output nonfatal and deterministic.
 - [x] Add a renewable controller ownership lease.
-- [ ] Add richer quality metrics and multi-candidate experiment ranking.
+- [x] Add bounded multi-candidate experiment ranking and promotion decisions.
 
 ## Acceptance criteria
 
@@ -71,6 +71,7 @@
 | Successful-worktree cleanup | Required | `gitops.py`, `orchestrator.py` | Clean removal and dirty preservation tests | README, architecture, SECURITY | Proven |
 | Bounded self-improvement | Required | normal work-item route | Live generation 1 | SPEC, architecture | Proven for one local cycle |
 | Measured self-improvement comparison | Required | baseline and candidate vectors with pass deltas | Improvement and unchanged-failure tests | README, SPEC, architecture, lifecycle contract | Promoted in `3a13e08` |
+| Ranked self-improvement experiments | Required | `config.py`, `orchestrator.py`, `state.py` | Multi-candidate tie-break and candidate-timeout lifecycle tests | README, architecture, security, lifecycle contract | Proven for deterministic Boolean gate scores |
 | Automated controlled-English precheck | Required | `writing.py`, CLI gate | Writing precheck tests and live command | README, writing standard | Proven for limited automated scope |
 | Full STE claim requires human reviews | Required | repository policy and docs | Deterministic release labels | README, AGENTS, writing standard | Not released; human reviews unavailable |
 
@@ -176,6 +177,28 @@ Alignment review for `controller-ownership-lease`:
 - The architecture visual now includes the controller lease and promotion
   ownership boundary.
 
+Alignment review for `ranked-self-improvement-experiments`:
+
+- Required conflict repaired: self-improvement previously created one candidate
+  and had no configured candidate-count or per-candidate duration bound.
+- Implementation-defined omission repaired: SQLite now stores each candidate's
+  isolated source identity, complete gate vector, deterministic score, rank,
+  eligibility, selection, and final promotion decision.
+- Deterministic selection orders candidates by descending passed-gate count and
+  then ascending candidate ID. Only an unchanged, all-pass, non-regressing
+  candidate is eligible, and the database permits at most one selected row for
+  each run.
+- Documentation-only drift repaired: README, architecture, security, lifecycle
+  behavior, and the execution-loop visual now describe bounded candidate
+  fan-out, ranking, winner cleanup, and preserved non-winner worktrees.
+- Reviewed and unaffected: `SPEC.json` already defines this work item and its
+  acceptance criteria, so desired-state content does not change.
+- Reviewed and unaffected: setup commands, adapter selection, secret redaction,
+  controller ownership, release, license, provenance, contribution, support,
+  and writing-standard boundaries do not change.
+- Reviewed and unaffected: the lifecycle JSON schema still describes the same
+  document structure. The instance changes only current behavior and evidence.
+
 ## Implementation progress
 
 The bootstrap reconciler provides a standard-library runtime and a Codex CLI
@@ -228,6 +251,9 @@ Evidence recorded on 2026-07-28:
 | Run Python gate | Parent environment has no source path | Import candidate package deterministically | Environment assertion and full gate replay | `test_gate_environment_uses_candidate_source_and_isolated_pytest` |
 | Evaluate self-improvement | Baseline fails and candidate passes | Record measurable improvement | Baseline and evaluation events | `test_self_improvement_records_baseline_and_improvement` |
 | Evaluate unchanged failure | Baseline and candidate gate fail | Record zero delta and no improvement | Baseline and evaluation events | `test_self_improvement_does_not_call_an_unchanged_failure_a_regression` |
+| Rank three candidates | Two eligible candidates have equal scores | Select candidate-001 and promote only it | Candidate rows, ranks, selection, promotion decision, and preserved non-winners | `test_self_improvement_ranks_candidates_and_promotes_deterministic_winner` |
+| Exhaust candidate budgets | Both agents exceed the per-candidate duration | Record complete not-run gate vectors and refuse promotion | Timed-out candidate rows, rankings, no-eligible decision, and unchanged Git | `test_self_improvement_candidate_timeout_prevents_promotion` |
+| Record experiment evidence | Run generation differs | Reject the candidate evidence mutation | Empty candidate ranking projection | `test_stale_generation_cannot_change_experiment_evidence` |
 | Add unrelated desired work | Full SPEC digest changes; item digest stays stable | Keep achieved item achieved | SQLite item state | `test_success_marks_item_achieved` |
 | Change an achieved item | Canonical item digest changes | Return the item to ready | SQLite item state | `test_success_marks_item_achieved` |
 | Migrate legacy identity | Stored item digest equals current full SPEC digest | Retain achieved state and store the item digest | SQLite digest and state | `test_sync_migrates_legacy_full_spec_digest_without_reopening` |
@@ -376,6 +402,29 @@ Controller ownership lease implementation evidence recorded on 2026-07-28:
 - Post-review Codeweb analysis found no new cycle, confirmed duplication, or
   lost caller.
 
+Ranked self-improvement implementation evidence recorded on 2026-07-28:
+
+- This bounded worker started from
+  `511c35a6deb164076f3d6c51f3517ac927e8595b`.
+- `PYTHONPATH=src PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q`
+  passed all 52 tests.
+- `python -m ruff check .` passed.
+- `PYTHONPATH=src python -m autobuild writing-check` found no automated
+  findings. Its final status remained
+  `NOT RELEASED — COMPLIANCE CHECK INCOMPLETE`.
+- `PYTHONPATH=src python -m autobuild validate --skip-git-clean` passed
+  configuration, SPEC, executable, and Draft 2020-12 lifecycle-contract
+  checks.
+- The exact clean-tree validation passed every semantic check. It reported only
+  the expected `git-clean` failure because this worker must leave the candidate
+  uncommitted for controller evaluation.
+- The structural mapping call was cancelled before a graph was created. Direct
+  call-site review, the complete lifecycle suite, Ruff, schema validation, and
+  diff checks provide the available structural evidence.
+- Pytest emitted the known ignored Windows permission warning while its exit
+  cleanup inspected an ambient temporary-directory link. The test command
+  returned success and did not change repository files.
+
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
 autoloading. A fresh project virtual environment remains the supported setup.
@@ -405,9 +454,10 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: the controller promoted `controller-ownership-lease`. Primary review
-repaired the SQLite lock-contention path and aligned the lifecycle contract.
+Status: the bounded worker implemented ranked self-improvement experiments.
+The complete repository suite, lint, writing precheck, and semantic validation
+pass.
 
-Next owner and action: run the complete gates, inspect live controller-lease
-events during the next cycle, commit and push the review follow-up, then start
-the ranked self-improvement experiment.
+Next owner and action: review the ranked candidate policy and deterministic
+evidence, then let the controller decide promotion under the current lease and
+base-commit checks.

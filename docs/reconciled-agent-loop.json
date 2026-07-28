@@ -19,7 +19,9 @@
       "controller lease generation",
       "controller lease expiration",
       "lease generation",
-      "lease expiration"
+      "lease expiration",
+      "self-improvement candidate limit",
+      "self-improvement candidate process-time limit"
     ]
   },
   "domain_states": [
@@ -68,7 +70,7 @@
   "reconciliation": {
     "observation": "Load the current SPEC, Git commit, controller lease, work items, runs, leases, and event history",
     "comparison": "Acquire current controller ownership, then find an eligible desired item that has no current run and remains below its attempt limit",
-    "action": "Renew controller ownership, create a generation-fenced run, isolate a worktree, execute the agent, evaluate gates, revalidate, and promote inside the controller-owned operation boundary",
+    "action": "Renew controller ownership, create a generation-fenced run, isolate one worktree for product work or a bounded set for self-improvement, execute each agent, evaluate gates, rank eligible self-improvement candidates, revalidate, and promote at most one candidate inside the controller-owned operation boundary",
     "repeat_condition": "Repeat while eligible work exists; re-observe after each state change, restart, timeout, or external change"
   },
   "dispatch_revalidation": {
@@ -91,6 +93,7 @@
     "timeouts": [
       "The agent process has a configured wall-clock timeout",
       "Each verification gate has a configured wall-clock timeout",
+      "Each self-improvement candidate has a configured combined agent-and-gate process-time limit",
       "The controller ownership lease has a configured wall-clock expiration",
       "The run lease has a configured wall-clock expiration"
     ]
@@ -103,7 +106,7 @@
   "preservation_cleanup": [
     {
       "semantic_condition": "The run is executing, evaluating, promoting, failed, or stale",
-      "artifact_action": "Preserve the worktree, candidate commit, and result summary",
+      "artifact_action": "Preserve each worktree, candidate commit, gate vector, score, ranking, decision, and result summary",
       "revalidation": "Read the durable run state before any future cleanup"
     },
     {
@@ -211,19 +214,19 @@
       "name": "evaluating",
       "classification": "execution",
       "owner": "Reconciler and configured gate runner",
-      "entry": "The agent exits successfully under the current lease",
-      "exit": "Any failed gate fails the run; all passed gates continue to fresh revalidation",
+      "entry": "The product agent exits successfully or the bounded self-improvement candidate agents finish under the current lease",
+      "exit": "Any failed gate fails product work; self-improvement ranks all candidates and continues only with one all-pass non-regressing winner",
       "revalidation": "Each heartbeat and gate-completion boundary compare the full SPEC digest and base commit, then renew controller ownership and validate the run generation and run lease time before recording a gate result",
       "retry_timeout": "A current heartbeat renews controller and run leases; gate timeout or authority loss stops the child and fails or stales the run",
       "restart": "An expired lease makes the run stale; preserve results",
       "disposal": "Preserve gate output in bounded event evidence",
-      "proof": "test_gate_failure_prevents_promotion, test_active_agent_stops_after_spec_authority_loss, and test_active_agent_stops_after_base_commit_authority_loss"
+      "proof": "test_gate_failure_prevents_promotion, test_self_improvement_ranks_candidates_and_promotes_deterministic_winner, test_self_improvement_candidate_timeout_prevents_promotion, test_active_agent_stops_after_spec_authority_loss, and test_active_agent_stops_after_base_commit_authority_loss"
     },
     {
       "name": "promoting",
       "classification": "execution",
       "owner": "Reconciler with the current controller owner token and generation",
-      "entry": "All gates pass and fresh SPEC and base-commit reads match the claim",
+      "entry": "All product gates pass, or one ranked self-improvement candidate is all-pass and non-regressing, and fresh SPEC and base-commit reads match the claim",
       "exit": "Fast-forward success reaches succeeded; Git invariant failure reaches failed",
       "revalidation": "Validate controller ownership and read the base commit immediately before fast-forward merge; hold the SQLite ownership transaction during promotion",
       "retry_timeout": "Do not retry a promotion after base movement without a new generation",
@@ -371,6 +374,20 @@
       "failure_injection": "Keep the observed gate failing in both evaluations",
       "expected_semantic_outcome": "Record no improvement with a zero pass delta instead of a false regression",
       "durable_evidence": "Baseline, candidate, measured evaluation, failed run, and preserved worktree"
+    },
+    {
+      "sequence": "create three isolated self-improvement candidates from one base, pass two equal-score candidates, and fail the third",
+      "transition": "executing through deterministic ranking, promoting, and succeeded",
+      "failure_injection": "Give the first two candidates equal all-pass scores",
+      "expected_semantic_outcome": "Ascending candidate ID breaks the score tie, selects only candidate-001, and promotes only that candidate",
+      "durable_evidence": "Three candidate rows, complete gate vectors, deterministic ranks, one selected row, promotion decision, promoted commit, and preserved non-winner worktrees"
+    },
+    {
+      "sequence": "run two self-improvement agents longer than the configured candidate process-time limit",
+      "transition": "executing through ranked evaluation to failed",
+      "failure_injection": "Exhaust each candidate budget before candidate commit and gates",
+      "expected_semantic_outcome": "Both candidates time out, no candidate is eligible, and Git promotion does not occur",
+      "durable_evidence": "Two timed-out candidate rows, zero scores, deterministic ranks, no-eligible-candidate decision, and unchanged base commit"
     },
     {
       "sequence": "achieve one item, add an unrelated item, then change the achieved item",

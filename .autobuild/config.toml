@@ -16,6 +16,10 @@ timeout_seconds = 3600
 allowed_environment = ["CI", "NO_COLOR", "PYTHONIOENCODING", "SYSTEMROOT", "TEMP", "TMP", "PATH", "PATHEXT", "WINDIR"]
 redacted_name_fragments = ["TOKEN", "SECRET", "PASSWORD", "KEY", "CREDENTIAL"]
 
+[self_improvement]
+max_candidates = 3
+candidate_timeout_seconds = 3600
+
 [[gates]]
 name = "tests"
 command = ["python", "-m", "pytest", "-q"]

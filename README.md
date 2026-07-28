@@ -37,9 +37,14 @@ but the project is not production-ready.
   promotion.
 - Cleans a successful worktree only after reachability, path, registration, and
   clean-state checks pass.
-- Uses the same path for product work and bounded self-improvement.
-- Records baseline and candidate gate vectors with measurable pass deltas for
-  self-improvement work.
+- Bounds self-improvement with a configured candidate count and a configured
+  combined agent-and-gate process-time budget for each candidate.
+- Starts each self-improvement candidate from the same base commit in a
+  separate worktree.
+- Records baseline and candidate gate vectors, deterministic gate-pass scores,
+  rankings, and the promotion decision in SQLite.
+- Selects only an all-pass, non-regressing candidate. It resolves score ties by
+  ascending candidate ID and promotes at most one candidate.
 - Treats automated controlled-English checks as evidence, not as an
   ASD-STE100 compliance decision.
 
@@ -72,6 +77,11 @@ The default configuration uses `codex exec` with workspace-write sandboxing.
 Review `.autobuild/config.toml` before the first live run. A successful agent
 process is not sufficient for promotion. All configured gates must pass, and
 they must leave the candidate unchanged.
+
+The `[self_improvement]` table sets `max_candidates` and
+`candidate_timeout_seconds`. The timeout bounds the combined child-process
+time for the agent and gates of each candidate. The default policy evaluates
+at most three candidates and gives each candidate at most 3600 seconds.
 
 ## Project contract
 
@@ -108,6 +118,8 @@ acquire a higher generation only after graceful release or lease expiry.
 - Sandbox strength depends on the configured agent and operating system.
 - The project does not yet provide remote scheduling, distributed leases,
   credential brokering, or automatic pull request creation.
+- Self-improvement scores use Boolean gate results. They do not measure
+  performance, maintainability, or other richer quality properties.
 - No license has been granted for this repository.
 
 ## Writing-standard boundary

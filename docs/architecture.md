@@ -7,25 +7,29 @@ flowchart LR
     S[SPEC.json<br/>desired outcomes] --> R[Reconciler]
     G[Git base commit<br/>source state] --> R
     D[(SQLite<br/>controller/run leases<br/>and evidence)] <--> R
-    R -->|fenced claim| W[Isolated Git worktree]
+    R -->|fenced claim| W[One isolated worktree<br/>per candidate]
     W --> A[Bounded agent process]
-    A --> C[Candidate commit]
-    C --> E[Verification gates]
+    A --> C[Candidate commits]
+    C --> E[Verification gates<br/>per candidate]
     A -. heartbeat .-> Q{Controller, SPEC, Git,<br/>generations, and leases current?}
     E -. heartbeat .-> Q
     Q -->|no: stop child| H
     Q -. yes: continue .-> A
     Q -. yes: continue .-> E
-    E -->|all pass| V[Fresh SPEC and Git read]
+    E --> K[Deterministic score and ranking]
+    K -->|one eligible winner| V[Fresh SPEC and Git read]
+    K -->|no eligible winner| F
     V -->|unchanged| P[Fast-forward promotion]
     V -->|changed| H[Preserved stale candidate]
-    E -->|failure or mutation| F[Preserved failed candidate]
+    E -->|product failure or mutation| F[Preserved failed candidate]
 ```
 
 Accessible description: The reconciler compares the SPEC, Git commit, and
-SQLite execution state. It sends a fenced claim to an isolated worktree. An
-agent changes that worktree. Verification gates evaluate the change. The
-controller commits the candidate and runs verification gates.
+SQLite execution state. It sends a fenced claim to one isolated worktree for
+product work. It sends a bounded self-improvement claim to a configured number
+of isolated candidate worktrees. An agent changes each worktree. Verification
+gates evaluate each committed change. The controller ranks self-improvement
+candidates before it selects at most one candidate.
 
 The controller
 rejects a gate that changes the candidate. It reads the SPEC and base Git commit
@@ -102,15 +106,27 @@ Self-improvement uses the normal work-item path. It does not bypass isolation,
 tests, revalidation, or promotion rules. A self-improvement item must name a
 measurable acceptance condition.
 
-The controller runs all gates against the
-base before dispatch. It records both the baseline and candidate gate vectors.
-It records a per-gate pass delta for each observed candidate result. A failed
-gate has a delta of `-1` when it passed at baseline and `0` when it also failed
-at baseline. The controller classifies these outcomes as `regression` and
-`no-improvement`, respectively.
+The `[self_improvement]` configuration sets the maximum candidate count and the
+combined agent-and-gate process-time budget for each candidate. The controller
+creates each candidate from the claimed base commit in a separate Git worktree.
+One candidate cannot change another candidate's source state.
 
-A candidate that passes all gates records the total passing-gate-count delta.
-A positive total is an `improvement`. A zero total is a `non-regression`.
+The controller runs all gates against the base before dispatch. It then runs
+all configured gates for each candidate while its process-time budget remains.
+The deterministic score is the number of passed gates. An eligible candidate
+has a successful agent and all gates pass. No gate can regress from the
+baseline. The gates must leave the committed candidate unchanged.
+
+The controller orders candidates by descending score and then by ascending
+candidate ID. It selects the first eligible candidate. This tie-break selects
+at most one candidate. If no candidate is eligible, the run fails without
+promotion.
+
+SQLite stores each candidate ID, ordinal, worktree, base commit, candidate
+commit, gate vector, classification, score, eligibility, rank, and selection.
+It also stores the selected, awaiting, promoted, or no-eligible-candidate
+promotion decision. The store recomputes the score and verifies the ranking
+before it accepts a winner. The JSON status output includes these records.
 
 ## Recovery
 
@@ -130,6 +146,10 @@ worktree. It first checks path containment, clean state, candidate identity,
 commit reachability, and Git worktree registration. A failed cleanup preserves
 the worktree and records terminal evidence.
 
+For a ranked self-improvement run, automatic cleanup applies only to the
+promoted winner. The controller preserves non-winning and failed candidate
+worktrees until a separate semantic cleanup decision exists.
+
 When automatic promotion is disabled, a verified candidate enters a stable
 `awaiting-promotion` state. The work item becomes blocked, and lease expiry does
 not discard the handoff evidence.
@@ -142,5 +162,5 @@ not discard the handoff evidence.
 - Promotion does not create pull requests or push changes.
 - The controller does not clean failed, stale, blocked, or manual-handoff
   worktrees.
-- Self-improvement comparison is limited to gate pass deltas. The harness does
-  not rank candidates with richer quality or performance metrics yet.
+- Self-improvement ranking uses Boolean gate-pass scores. It does not use
+  richer quality or performance metrics.

@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import time
 import uuid
 from contextlib import suppress
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .agent import run_agent
 from .config import Config, load_config
 from .gitops import (
     GitError,
+    Worktree,
     cleanup_succeeded_worktree,
     commit_candidate,
     create_worktree,
@@ -29,6 +32,22 @@ from .models import (
 from .process import gate_environment, redact_text, run_gate, safe_environment
 from .spec import load_spec
 from .state import ControllerLeaseError, StaleLeaseError, StateStore
+
+
+@dataclass
+class _CandidateExperiment:
+    candidate_id: str
+    ordinal: int
+    worktree: Worktree
+    remaining_seconds: float
+    candidate_commit: str | None = None
+    agent_passed: bool = False
+    gate_results: dict[str, bool | None] = field(default_factory=dict)
+    score: int = 0
+    all_pass: bool = False
+    non_regressing: bool = False
+    eligible: bool = False
+    classification: str = "pending"
 
 
 class Orchestrator:
@@ -182,99 +201,196 @@ class Orchestrator:
                         "baseline gates changed the base repository",
                     )
 
-            worktree = create_worktree(
-                self.root,
-                self.config.worktree_root,
-                claim.run_id,
-                claim.work_item.id,
-                claim.base_commit,
-            )
-            authority_loss = source_authority_loss()
-            if authority_loss is not None:
-                self.store.expire_claim(
-                    claim,
-                    authority_loss,
-                    controller_lease=controller_lease,
-                )
-                detail = f"authority lost: {authority_loss.value}"
-                return RunOutcome(
-                    claim.run_id,
-                    "stale",
-                    detail,
-                    worktree.path,
-                )
-            if not is_clean(self.root):
-                self.store.transition(
-                    claim,
-                    RunStatus.LEASED,
-                    RunStatus.STALE,
-                    controller_lease=controller_lease,
-                    detail="desired state changed at dispatch",
-                    worktree=worktree.path,
-                )
-                return RunOutcome(
-                    claim.run_id,
-                    "stale",
-                    "desired state changed at dispatch",
-                    worktree.path,
-                )
-            self.store.transition(
-                claim,
-                RunStatus.LEASED,
-                RunStatus.EXECUTING,
-                controller_lease=controller_lease,
-                worktree=worktree.path,
-            )
-            execution_state = RunStatus.EXECUTING
             environment = safe_environment(
                 self.config.policy.allowed_environment,
                 self.config.policy.redacted_name_fragments,
             )
-
-            result = run_agent(
-                self.config.agent,
-                claim.work_item,
-                claim.base_commit,
-                worktree.path,
-                self.config.result_root / f"{claim.run_id}.txt",
-                environment,
-                heartbeat=revalidate_authority,
-                heartbeat_interval_seconds=heartbeat_interval,
+            is_self_improvement = (
+                claim.work_item.kind is WorkKind.SELF_IMPROVEMENT
             )
-            revalidate_authority()
-            self.store.record_event(
-                claim,
-                "agent_finished",
-                {
+            experiment_count = (
+                self.config.self_improvement.max_candidates
+                if is_self_improvement
+                else 1
+            )
+            candidates: list[_CandidateExperiment] = []
+            for ordinal in range(1, experiment_count + 1):
+                if candidates:
+                    revalidate_authority()
+                candidate_id = f"candidate-{ordinal:03d}"
+                worktree_id = (
+                    f"{ordinal:03d}-{claim.run_id}"
+                    if is_self_improvement
+                    else claim.run_id
+                )
+                worktree = create_worktree(
+                    self.root,
+                    self.config.worktree_root,
+                    worktree_id,
+                    claim.work_item.id,
+                    claim.base_commit,
+                )
+                authority_loss = source_authority_loss()
+                if authority_loss is not None:
+                    self.store.expire_claim(
+                        claim,
+                        authority_loss,
+                        controller_lease=controller_lease,
+                    )
+                    detail = f"authority lost: {authority_loss.value}"
+                    return RunOutcome(
+                        claim.run_id,
+                        "stale",
+                        detail,
+                        worktree.path,
+                    )
+                if not is_clean(self.root):
+                    self.store.transition(
+                        claim,
+                        RunStatus.LEASED
+                        if not candidates
+                        else RunStatus.EXECUTING,
+                        RunStatus.STALE,
+                        controller_lease=controller_lease,
+                        detail="desired state changed at dispatch",
+                        worktree=worktree.path,
+                    )
+                    return RunOutcome(
+                        claim.run_id,
+                        "stale",
+                        "desired state changed at dispatch",
+                        worktree.path,
+                    )
+                if not candidates:
+                    self.store.transition(
+                        claim,
+                        RunStatus.LEASED,
+                        RunStatus.EXECUTING,
+                        controller_lease=controller_lease,
+                        worktree=worktree.path,
+                    )
+                    execution_state = RunStatus.EXECUTING
+                experiment = _CandidateExperiment(
+                    candidate_id=candidate_id,
+                    ordinal=ordinal,
+                    worktree=worktree,
+                    remaining_seconds=float(
+                        self.config.self_improvement.candidate_timeout_seconds
+                        if is_self_improvement
+                        else self.config.agent.timeout_seconds
+                    ),
+                )
+                candidates.append(experiment)
+                if is_self_improvement:
+                    self.store.record_experiment_candidate(
+                        claim,
+                        candidate_id=candidate_id,
+                        ordinal=ordinal,
+                        worktree=worktree.path,
+                        candidate_commit=None,
+                        status="executing",
+                        classification="pending",
+                        gate_results={},
+                        score=0,
+                        all_pass=False,
+                        non_regressing=False,
+                        eligible=False,
+                        controller_lease=controller_lease,
+                    )
+                agent_timeout = min(
+                    float(self.config.agent.timeout_seconds),
+                    experiment.remaining_seconds,
+                )
+                agent_config = replace(
+                    self.config.agent,
+                    timeout_seconds=agent_timeout,
+                )
+                agent_started = time.monotonic()
+                result = run_agent(
+                    agent_config,
+                    claim.work_item,
+                    claim.base_commit,
+                    worktree.path,
+                    self.config.result_root
+                    / (
+                        f"{claim.run_id}-{candidate_id}.txt"
+                        if is_self_improvement
+                        else f"{claim.run_id}.txt"
+                    ),
+                    environment,
+                    heartbeat=revalidate_authority,
+                    heartbeat_interval_seconds=heartbeat_interval,
+                )
+                experiment.remaining_seconds = max(
+                    0.0,
+                    experiment.remaining_seconds
+                    - (time.monotonic() - agent_started),
+                )
+                revalidate_authority()
+                event_payload = {
                     "returncode": result.returncode,
                     "timed_out": result.timed_out,
                     "summary": redact_text(
                         result.summary,
                         self.config.policy.redacted_name_fragments,
                     ),
-                },
-                controller_lease=controller_lease,
-            )
-            if not result.passed:
-                self.store.transition(
+                }
+                if is_self_improvement:
+                    event_payload["candidate_id"] = candidate_id
+                self.store.record_event(
                     claim,
-                    RunStatus.EXECUTING,
-                    RunStatus.FAILED,
+                    "agent_finished",
+                    event_payload,
                     controller_lease=controller_lease,
-                    detail="agent process failed or timed out",
                 )
-                return RunOutcome(
-                    claim.run_id,
-                    "failed",
-                    "agent process failed or timed out",
-                    worktree.path,
-                )
+                if not result.passed:
+                    experiment.classification = (
+                        "timed-out" if result.timed_out else "agent-failed"
+                    )
+                    if is_self_improvement:
+                        experiment.gate_results = {
+                            gate.name: None for gate in self.config.gates
+                        }
+                        self.store.record_experiment_candidate(
+                            claim,
+                            candidate_id=candidate_id,
+                            ordinal=ordinal,
+                            worktree=worktree.path,
+                            candidate_commit=None,
+                            status="failed",
+                            classification=experiment.classification,
+                            gate_results=experiment.gate_results,
+                            score=0,
+                            all_pass=False,
+                            non_regressing=False,
+                            eligible=False,
+                            controller_lease=controller_lease,
+                        )
+                        continue
+                    self.store.transition(
+                        claim,
+                        RunStatus.EXECUTING,
+                        RunStatus.FAILED,
+                        controller_lease=controller_lease,
+                        detail="agent process failed or timed out",
+                    )
+                    return RunOutcome(
+                        claim.run_id,
+                        "failed",
+                        "agent process failed or timed out",
+                        worktree.path,
+                    )
 
-            revalidate_authority()
-            candidate = commit_candidate(
-                worktree, f"autobuild: complete {claim.work_item.id}"
-            )
-            revalidate_authority()
+                experiment.agent_passed = True
+                revalidate_authority()
+                experiment.candidate_commit = commit_candidate(
+                    worktree,
+                    f"autobuild: complete {claim.work_item.id} ({candidate_id})"
+                    if is_self_improvement
+                    else f"autobuild: complete {claim.work_item.id}",
+                )
+                revalidate_authority()
+
             self.store.transition(
                 claim,
                 RunStatus.EXECUTING,
@@ -282,111 +398,225 @@ class Orchestrator:
                 controller_lease=controller_lease,
             )
             execution_state = RunStatus.EVALUATING
-            evaluation_environment = gate_environment(environment, worktree.path)
-            candidate_results: dict[str, bool] = {}
-            for gate in self.config.gates:
-                gate_result = run_gate(
-                    gate,
+            for experiment in candidates:
+                if not experiment.agent_passed:
+                    continue
+                worktree = experiment.worktree
+                evaluation_environment = gate_environment(
+                    environment,
                     worktree.path,
-                    evaluation_environment,
-                    heartbeat=revalidate_authority,
-                    heartbeat_interval_seconds=heartbeat_interval,
                 )
-                revalidate_authority()
-                self.store.record_event(
-                    claim,
-                    "gate_finished",
-                    {
-                        "name": gate_result.name,
-                        "returncode": gate_result.returncode,
-                        "duration_seconds": round(gate_result.duration_seconds, 3),
-                        "timed_out": gate_result.timed_out,
-                        "stdout": redact_text(
-                            gate_result.stdout,
-                            self.config.policy.redacted_name_fragments,
-                        ),
-                        "stderr": redact_text(
-                            gate_result.stderr,
-                            self.config.policy.redacted_name_fragments,
-                        ),
-                    },
-                    controller_lease=controller_lease,
-                )
-                candidate_results[gate.name] = gate_result.passed
-                if not gate_result.passed:
-                    if claim.work_item.kind is WorkKind.SELF_IMPROVEMENT:
-                        gate_pass_deltas = {
-                            name: int(passed) - int(baseline_results[name])
-                            for name, passed in candidate_results.items()
+                for gate in self.config.gates:
+                    if (
+                        is_self_improvement
+                        and experiment.remaining_seconds <= 0
+                    ):
+                        gate_result = None
+                        experiment.gate_results[gate.name] = False
+                        gate_payload: dict[str, object] = {
+                            "name": gate.name,
+                            "returncode": None,
+                            "duration_seconds": 0.0,
+                            "timed_out": True,
+                            "stdout": "",
+                            "stderr": "candidate experiment duration exhausted",
                         }
-                        self.store.record_event(
-                            claim,
-                            "self_improvement_evaluated",
-                            {
-                                "classification": (
-                                    "regression"
-                                    if any(delta < 0 for delta in gate_pass_deltas.values())
-                                    else "no-improvement"
+                    else:
+                        bounded_gate = (
+                            replace(
+                                gate,
+                                timeout_seconds=min(
+                                    float(gate.timeout_seconds),
+                                    experiment.remaining_seconds,
                                 ),
-                                "failed_gate": gate.name,
-                                "baseline_gates": baseline_results,
-                                "candidate_gates": candidate_results,
-                                "gate_pass_deltas": gate_pass_deltas,
-                            },
-                            controller_lease=controller_lease,
+                            )
+                            if is_self_improvement
+                            else gate
                         )
+                        gate_started = time.monotonic()
+                        gate_result = run_gate(
+                            bounded_gate,
+                            worktree.path,
+                            evaluation_environment,
+                            heartbeat=revalidate_authority,
+                            heartbeat_interval_seconds=heartbeat_interval,
+                        )
+                        if is_self_improvement:
+                            experiment.remaining_seconds = max(
+                                0.0,
+                                experiment.remaining_seconds
+                                - (time.monotonic() - gate_started),
+                            )
+                        revalidate_authority()
+                        experiment.gate_results[gate.name] = gate_result.passed
+                        gate_payload = {
+                            "name": gate_result.name,
+                            "returncode": gate_result.returncode,
+                            "duration_seconds": round(
+                                gate_result.duration_seconds,
+                                3,
+                            ),
+                            "timed_out": gate_result.timed_out,
+                            "stdout": redact_text(
+                                gate_result.stdout,
+                                self.config.policy.redacted_name_fragments,
+                            ),
+                            "stderr": redact_text(
+                                gate_result.stderr,
+                                self.config.policy.redacted_name_fragments,
+                            ),
+                        }
+                    if is_self_improvement:
+                        gate_payload["candidate_id"] = experiment.candidate_id
+                    self.store.record_event(
+                        claim,
+                        "gate_finished",
+                        gate_payload,
+                        controller_lease=controller_lease,
+                    )
+                    if not is_self_improvement and not experiment.gate_results[
+                        gate.name
+                    ]:
+                        self.store.transition(
+                            claim,
+                            RunStatus.EVALUATING,
+                            RunStatus.FAILED,
+                            controller_lease=controller_lease,
+                            detail=f"gate failed: {gate.name}",
+                        )
+                        return RunOutcome(
+                            claim.run_id,
+                            "failed",
+                            f"gate failed: {gate.name}",
+                            worktree.path,
+                        )
+
+                unchanged = (
+                    not has_changes(worktree)
+                    and current_commit(worktree.path)
+                    == experiment.candidate_commit
+                )
+                if not is_self_improvement and not unchanged:
                     self.store.transition(
                         claim,
                         RunStatus.EVALUATING,
                         RunStatus.FAILED,
                         controller_lease=controller_lease,
-                        detail=f"gate failed: {gate.name}",
+                        detail="verification gates changed the candidate",
                     )
                     return RunOutcome(
                         claim.run_id,
                         "failed",
-                        f"gate failed: {gate.name}",
+                        "verification gates changed the candidate",
                         worktree.path,
                     )
-
-            if has_changes(worktree) or current_commit(worktree.path) != candidate:
-                self.store.transition(
-                    claim,
-                    RunStatus.EVALUATING,
-                    RunStatus.FAILED,
-                    controller_lease=controller_lease,
-                    detail="verification gates changed the candidate",
-                )
-                return RunOutcome(
-                    claim.run_id,
-                    "failed",
-                    "verification gates changed the candidate",
-                    worktree.path,
-                )
-            if claim.work_item.kind is WorkKind.SELF_IMPROVEMENT:
+                if not is_self_improvement:
+                    continue
                 gate_pass_deltas = {
-                    name: int(candidate_results[name]) - int(passed)
+                    name: int(experiment.gate_results[name]) - int(passed)
                     for name, passed in baseline_results.items()
                 }
-                passing_gate_count_delta = sum(candidate_results.values()) - sum(
+                experiment.score = sum(experiment.gate_results.values())
+                experiment.all_pass = all(experiment.gate_results.values())
+                experiment.non_regressing = not any(
+                    delta < 0 for delta in gate_pass_deltas.values()
+                )
+                experiment.eligible = (
+                    unchanged
+                    and experiment.all_pass
+                    and experiment.non_regressing
+                )
+                passing_gate_count_delta = experiment.score - sum(
                     baseline_results.values()
                 )
+                if not unchanged:
+                    experiment.classification = "mutated"
+                elif any(delta < 0 for delta in gate_pass_deltas.values()):
+                    experiment.classification = "regression"
+                elif experiment.all_pass and passing_gate_count_delta > 0:
+                    experiment.classification = "improvement"
+                elif experiment.all_pass:
+                    experiment.classification = "non-regression"
+                else:
+                    experiment.classification = "no-improvement"
                 self.store.record_event(
                     claim,
                     "self_improvement_evaluated",
                     {
-                        "classification": (
-                            "improvement"
-                            if passing_gate_count_delta > 0
-                            else "non-regression"
-                        ),
+                        "candidate_id": experiment.candidate_id,
+                        "classification": experiment.classification,
                         "baseline_gates": baseline_results,
-                        "candidate_gates": candidate_results,
+                        "candidate_gates": experiment.gate_results,
                         "gate_pass_deltas": gate_pass_deltas,
                         "passing_gate_count_delta": passing_gate_count_delta,
+                        "score": experiment.score,
+                        "eligible": experiment.eligible,
                     },
                     controller_lease=controller_lease,
                 )
+                self.store.record_experiment_candidate(
+                    claim,
+                    candidate_id=experiment.candidate_id,
+                    ordinal=experiment.ordinal,
+                    worktree=worktree.path,
+                    candidate_commit=experiment.candidate_commit,
+                    status="evaluated",
+                    classification=experiment.classification,
+                    gate_results=experiment.gate_results,
+                    score=experiment.score,
+                    all_pass=experiment.all_pass,
+                    non_regressing=experiment.non_regressing,
+                    eligible=experiment.eligible,
+                    controller_lease=controller_lease,
+                )
+
+            if is_self_improvement:
+                ranked_candidates = sorted(
+                    candidates,
+                    key=lambda experiment: (
+                        -experiment.score,
+                        experiment.candidate_id,
+                    ),
+                )
+                winner = next(
+                    (
+                        experiment
+                        for experiment in ranked_candidates
+                        if experiment.eligible
+                    ),
+                    None,
+                )
+                self.store.record_experiment_ranking(
+                    claim,
+                    [
+                        experiment.candidate_id
+                        for experiment in ranked_candidates
+                    ],
+                    winner.candidate_id if winner else None,
+                    controller_lease=controller_lease,
+                )
+                if winner is None:
+                    self.store.transition(
+                        claim,
+                        RunStatus.EVALUATING,
+                        RunStatus.FAILED,
+                        controller_lease=controller_lease,
+                        detail="no eligible self-improvement candidate",
+                    )
+                    return RunOutcome(
+                        claim.run_id,
+                        "failed",
+                        "no eligible self-improvement candidate",
+                        candidates[0].worktree.path,
+                    )
+                worktree = winner.worktree
+                candidate = winner.candidate_commit
+            else:
+                winner = None
+                worktree = candidates[0].worktree
+                candidate = candidates[0].candidate_commit
+            if candidate is None:
+                raise GitError("candidate commit is missing after evaluation")
             authority_loss = source_authority_loss()
             if authority_loss is not None:
                 self.store.expire_claim(
@@ -431,6 +661,12 @@ class Orchestrator:
                     controller_lease=controller_lease,
                     detail=f"verified candidate {candidate}",
                 )
+                if is_self_improvement:
+                    self.store.update_promotion_decision(
+                        claim,
+                        "awaiting-promotion",
+                        controller_lease=controller_lease,
+                    )
                 return RunOutcome(
                     claim.run_id,
                     "awaiting-promotion",
@@ -453,6 +689,13 @@ class Orchestrator:
                 controller_lease=controller_lease,
                 detail=f"promoted {promoted}",
             )
+            if is_self_improvement:
+                self.store.update_promotion_decision(
+                    claim,
+                    "promoted",
+                    controller_lease=controller_lease,
+                    promoted_commit=promoted,
+                )
             detail = f"promoted {promoted}"
             if self.config.cleanup_succeeded_worktrees:
                 try:

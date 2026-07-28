@@ -28,6 +28,12 @@ class PolicyConfig:
 
 
 @dataclass(frozen=True)
+class SelfImprovementConfig:
+    max_candidates: int
+    candidate_timeout_seconds: int
+
+
+@dataclass(frozen=True)
 class Config:
     root: Path
     state_path: Path
@@ -39,6 +45,7 @@ class Config:
     cleanup_succeeded_worktrees: bool
     agent: AgentConfig
     policy: PolicyConfig
+    self_improvement: SelfImprovementConfig
     gates: tuple[Gate, ...]
 
 
@@ -80,9 +87,14 @@ def load_config(root: Path, path: Path | None = None) -> Config:
 
     agent_data = data.get("agent")
     policy_data = data.get("policy")
+    self_improvement_data = data.get("self_improvement")
     gate_data = data.get("gates")
-    if not isinstance(agent_data, dict) or not isinstance(policy_data, dict):
-        raise ConfigError("agent and policy tables are required")
+    if (
+        not isinstance(agent_data, dict)
+        or not isinstance(policy_data, dict)
+        or not isinstance(self_improvement_data, dict)
+    ):
+        raise ConfigError("agent, policy, and self_improvement tables are required")
     if not isinstance(gate_data, list) or not gate_data:
         raise ConfigError("at least one gate is required")
 
@@ -100,6 +112,8 @@ def load_config(root: Path, path: Path | None = None) -> Config:
                 timeout_seconds=_require_int(item, "timeout_seconds"),
             )
         )
+    if len({gate.name for gate in gates}) != len(gates):
+        raise ConfigError("gate names must be unique")
 
     return Config(
         root=root,
@@ -121,6 +135,13 @@ def load_config(root: Path, path: Path | None = None) -> Config:
             allowed_environment=frozenset(_require_string_list(policy_data, "allowed_environment")),
             redacted_name_fragments=_require_string_list(
                 policy_data, "redacted_name_fragments"
+            ),
+        ),
+        self_improvement=SelfImprovementConfig(
+            max_candidates=_require_int(self_improvement_data, "max_candidates"),
+            candidate_timeout_seconds=_require_int(
+                self_improvement_data,
+                "candidate_timeout_seconds",
             ),
         ),
         gates=tuple(gates),

@@ -128,8 +128,39 @@ class StateStore:
                     lease_expires_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS experiment_candidates (
+                    run_id TEXT NOT NULL REFERENCES runs(id),
+                    candidate_id TEXT NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    worktree TEXT NOT NULL,
+                    base_commit TEXT NOT NULL,
+                    candidate_commit TEXT,
+                    status TEXT NOT NULL,
+                    classification TEXT NOT NULL,
+                    gate_results_json TEXT NOT NULL,
+                    score INTEGER NOT NULL,
+                    all_pass INTEGER NOT NULL,
+                    non_regressing INTEGER NOT NULL,
+                    eligible INTEGER NOT NULL,
+                    rank INTEGER,
+                    selected INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (run_id, candidate_id)
+                );
+                CREATE TABLE IF NOT EXISTS promotion_decisions (
+                    run_id TEXT PRIMARY KEY REFERENCES runs(id),
+                    candidate_id TEXT,
+                    candidate_commit TEXT,
+                    decision TEXT NOT NULL,
+                    promoted_commit TEXT,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS runs_item_status
                     ON runs(work_item_id, status);
+                CREATE INDEX IF NOT EXISTS experiment_candidates_rank
+                    ON experiment_candidates(run_id, rank);
+                CREATE UNIQUE INDEX IF NOT EXISTS experiment_candidates_one_selected
+                    ON experiment_candidates(run_id) WHERE selected = 1;
                 """
             )
 
@@ -768,12 +799,292 @@ class StateStore:
                 (claim.run_id, kind, json.dumps(payload, sort_keys=True), now),
             )
 
+    def record_experiment_candidate(
+        self,
+        claim: Claim,
+        *,
+        candidate_id: str,
+        ordinal: int,
+        worktree: Path,
+        candidate_commit: str | None,
+        status: str,
+        classification: str,
+        gate_results: dict[str, bool | None],
+        score: int,
+        all_pass: bool,
+        non_regressing: bool,
+        eligible: bool,
+        controller_lease: ControllerLease,
+    ) -> None:
+        expected_score = sum(result is True for result in gate_results.values())
+        expected_all_pass = bool(gate_results) and all(
+            result is True for result in gate_results.values()
+        )
+        if score != expected_score or all_pass != expected_all_pass:
+            raise ValueError("experiment score does not match its gate results")
+        if eligible and not (
+            all_pass
+            and non_regressing
+            and candidate_commit
+            and status == "evaluated"
+            and classification in {"improvement", "non-regression"}
+        ):
+            raise ValueError("experiment candidate is not eligible")
+        now = _timestamp()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_controller_lease(connection, controller_lease, now)
+            current = connection.execute(
+                """
+                SELECT 1 FROM runs
+                WHERE id = ? AND generation = ? AND lease_expires_at > ?
+                  AND status IN ('executing', 'evaluating')
+                """,
+                (claim.run_id, claim.generation, now),
+            ).fetchone()
+            if current is None:
+                raise StaleLeaseError(
+                    f"run {claim.run_id} generation {claim.generation} is not current"
+                )
+            connection.execute(
+                """
+                INSERT INTO experiment_candidates(
+                    run_id, candidate_id, ordinal, worktree, base_commit,
+                    candidate_commit, status, classification, gate_results_json,
+                    score, all_pass, non_regressing, eligible, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, candidate_id) DO UPDATE SET
+                    worktree = excluded.worktree,
+                    candidate_commit = excluded.candidate_commit,
+                    status = excluded.status,
+                    classification = excluded.classification,
+                    gate_results_json = excluded.gate_results_json,
+                    score = excluded.score,
+                    all_pass = excluded.all_pass,
+                    non_regressing = excluded.non_regressing,
+                    eligible = excluded.eligible,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    claim.run_id,
+                    candidate_id,
+                    ordinal,
+                    str(worktree),
+                    claim.base_commit,
+                    candidate_commit,
+                    status,
+                    classification,
+                    json.dumps(gate_results, sort_keys=True),
+                    score,
+                    int(all_pass),
+                    int(non_regressing),
+                    int(eligible),
+                    now,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO events(run_id, kind, payload_json, created_at) VALUES(?, ?, ?, ?)",
+                (
+                    claim.run_id,
+                    "experiment_candidate_recorded",
+                    json.dumps(
+                        {
+                            "candidate_id": candidate_id,
+                            "status": status,
+                            "score": score,
+                            "eligible": eligible,
+                        },
+                        sort_keys=True,
+                    ),
+                    now,
+                ),
+            )
+
+    def record_experiment_ranking(
+        self,
+        claim: Claim,
+        candidate_ids: list[str],
+        winner_candidate_id: str | None,
+        *,
+        controller_lease: ControllerLease,
+    ) -> None:
+        now = _timestamp()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_controller_lease(connection, controller_lease, now)
+            current = connection.execute(
+                """
+                SELECT 1 FROM runs
+                WHERE id = ? AND generation = ? AND lease_expires_at > ?
+                  AND status = 'evaluating'
+                """,
+                (claim.run_id, claim.generation, now),
+            ).fetchone()
+            if current is None:
+                raise StaleLeaseError(
+                    f"run {claim.run_id} generation {claim.generation} is not current"
+                )
+            stored = {
+                row["candidate_id"]: row
+                for row in connection.execute(
+                    """
+                    SELECT candidate_id, candidate_commit, eligible, score
+                    FROM experiment_candidates
+                    WHERE run_id = ?
+                    """,
+                    (claim.run_id,),
+                )
+            }
+            if (
+                len(candidate_ids) != len(set(candidate_ids))
+                or set(stored) != set(candidate_ids)
+            ):
+                raise ValueError("experiment ranking does not match stored candidates")
+            expected_ranking = sorted(
+                stored,
+                key=lambda candidate_id: (
+                    -stored[candidate_id]["score"],
+                    candidate_id,
+                ),
+            )
+            expected_winner = next(
+                (
+                    candidate_id
+                    for candidate_id in expected_ranking
+                    if stored[candidate_id]["eligible"]
+                ),
+                None,
+            )
+            if (
+                candidate_ids != expected_ranking
+                or winner_candidate_id != expected_winner
+            ):
+                raise ValueError("experiment ranking is not deterministic")
+            connection.execute(
+                """
+                UPDATE experiment_candidates
+                SET selected = 0, updated_at = ?
+                WHERE run_id = ?
+                """,
+                (now, claim.run_id),
+            )
+            for rank, candidate_id in enumerate(candidate_ids, start=1):
+                connection.execute(
+                    """
+                    UPDATE experiment_candidates
+                    SET rank = ?, selected = ?, updated_at = ?
+                    WHERE run_id = ? AND candidate_id = ?
+                    """,
+                    (
+                        rank,
+                        int(candidate_id == winner_candidate_id),
+                        now,
+                        claim.run_id,
+                        candidate_id,
+                    ),
+                )
+            winner = stored.get(winner_candidate_id) if winner_candidate_id else None
+            decision = (
+                "selected-for-promotion"
+                if winner_candidate_id is not None
+                else "no-eligible-candidate"
+            )
+            connection.execute(
+                """
+                INSERT INTO promotion_decisions(
+                    run_id, candidate_id, candidate_commit, decision,
+                    promoted_commit, updated_at
+                ) VALUES (?, ?, ?, ?, NULL, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    candidate_id = excluded.candidate_id,
+                    candidate_commit = excluded.candidate_commit,
+                    decision = excluded.decision,
+                    promoted_commit = NULL,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    claim.run_id,
+                    winner_candidate_id,
+                    winner["candidate_commit"] if winner else None,
+                    decision,
+                    now,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO events(run_id, kind, payload_json, created_at) VALUES(?, ?, ?, ?)",
+                (
+                    claim.run_id,
+                    "experiment_ranked",
+                    json.dumps(
+                        {
+                            "ranking": candidate_ids,
+                            "winner_candidate_id": winner_candidate_id,
+                            "decision": decision,
+                        },
+                        sort_keys=True,
+                    ),
+                    now,
+                ),
+            )
+
+    def update_promotion_decision(
+        self,
+        claim: Claim,
+        decision: str,
+        *,
+        controller_lease: ControllerLease,
+        promoted_commit: str | None = None,
+    ) -> None:
+        now = _timestamp()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_controller_lease(connection, controller_lease, now)
+            current = connection.execute(
+                """
+                SELECT 1 FROM runs
+                WHERE id = ? AND generation = ?
+                  AND status IN ('awaiting-promotion', 'succeeded')
+                """,
+                (claim.run_id, claim.generation),
+            ).fetchone()
+            if current is None:
+                raise StaleLeaseError(
+                    f"run {claim.run_id} generation {claim.generation} is not current"
+                )
+            cursor = connection.execute(
+                """
+                UPDATE promotion_decisions
+                SET decision = ?, promoted_commit = ?, updated_at = ?
+                WHERE run_id = ?
+                """,
+                (decision, promoted_commit, now, claim.run_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("promotion decision is not initialized")
+            connection.execute(
+                "INSERT INTO events(run_id, kind, payload_json, created_at) VALUES(?, ?, ?, ?)",
+                (
+                    claim.run_id,
+                    "promotion_decision",
+                    json.dumps(
+                        {
+                            "decision": decision,
+                            "promoted_commit": promoted_commit,
+                        },
+                        sort_keys=True,
+                    ),
+                    now,
+                ),
+            )
+
     def status(self) -> dict[str, object]:
         if not self.path.is_file():
             return {
                 "controller_lease": None,
                 "work_items": [],
                 "recent_runs": [],
+                "candidate_rankings": [],
+                "promotion_decisions": [],
             }
         with self._read_only_connect() as connection:
             items = [
@@ -812,8 +1123,52 @@ class StateStore:
                     **dict(controller),
                     "active": controller["lease_expires_at"] > _timestamp(),
                 }
+            try:
+                candidates = [
+                    {
+                        **dict(row),
+                        "gate_results": json.loads(row["gate_results_json"]),
+                        "all_pass": bool(row["all_pass"]),
+                        "non_regressing": bool(row["non_regressing"]),
+                        "eligible": bool(row["eligible"]),
+                        "selected": bool(row["selected"]),
+                    }
+                    for row in connection.execute(
+                        """
+                        SELECT run_id, candidate_id, ordinal, worktree,
+                               base_commit, candidate_commit, status,
+                               classification, gate_results_json, score,
+                               all_pass, non_regressing, eligible, rank,
+                               selected, updated_at
+                        FROM experiment_candidates
+                        ORDER BY updated_at DESC, run_id, rank, ordinal
+                        LIMIT 100
+                        """
+                    )
+                ]
+                for candidate in candidates:
+                    del candidate["gate_results_json"]
+                promotion_decisions = [
+                    dict(row)
+                    for row in connection.execute(
+                        """
+                        SELECT run_id, candidate_id, candidate_commit, decision,
+                               promoted_commit, updated_at
+                        FROM promotion_decisions
+                        ORDER BY updated_at DESC
+                        LIMIT 20
+                        """
+                    )
+                ]
+            except sqlite3.OperationalError as error:
+                if "no such table" not in str(error):
+                    raise
+                candidates = []
+                promotion_decisions = []
             return {
                 "controller_lease": controller_status,
                 "work_items": items,
                 "recent_runs": runs,
+                "candidate_rankings": candidates,
+                "promotion_decisions": promotion_decisions,
             }

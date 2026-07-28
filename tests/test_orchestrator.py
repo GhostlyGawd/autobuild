@@ -15,7 +15,12 @@ from conftest import git, write_spec
 
 import autobuild.orchestrator as orchestrator_module
 import autobuild.state as state_module
-from autobuild.config import AgentConfig, Config, PolicyConfig
+from autobuild.config import (
+    AgentConfig,
+    Config,
+    PolicyConfig,
+    SelfImprovementConfig,
+)
 from autobuild.gitops import GitError, current_commit
 from autobuild.models import Gate
 from autobuild.orchestrator import Orchestrator
@@ -29,6 +34,8 @@ def config_for(
     auto_promote: bool = True,
     lease_seconds: int = 60,
     agent_code: str | None = None,
+    max_candidates: int = 1,
+    candidate_timeout_seconds: int = 30,
 ) -> Config:
     return Config(
         root=root,
@@ -52,6 +59,10 @@ def config_for(
         policy=PolicyConfig(
             allowed_environment=frozenset({"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR"}),
             redacted_name_fragments=("TOKEN", "SECRET"),
+        ),
+        self_improvement=SelfImprovementConfig(
+            max_candidates=max_candidates,
+            candidate_timeout_seconds=candidate_timeout_seconds,
         ),
         gates=(
             Gate(
@@ -566,10 +577,13 @@ def test_self_improvement_records_baseline_and_improvement(
     evaluation = json.loads(rows[1][1])
     assert evaluation == {
         "baseline_gates": {"result": False},
+        "candidate_id": "candidate-001",
         "candidate_gates": {"result": True},
         "classification": "improvement",
+        "eligible": True,
         "gate_pass_deltas": {"result": 1},
         "passing_gate_count_delta": 1,
+        "score": 1,
     }
 
 
@@ -599,8 +613,112 @@ def test_self_improvement_does_not_call_an_unchanged_failure_a_regression(
     assert row is not None
     assert json.loads(row[0]) == {
         "baseline_gates": {"result": False},
+        "candidate_id": "candidate-001",
         "candidate_gates": {"result": False},
         "classification": "no-improvement",
-        "failed_gate": "result",
+        "eligible": False,
         "gate_pass_deltas": {"result": 0},
+        "passing_gate_count_delta": 0,
+        "score": 0,
     }
+
+
+def test_self_improvement_ranks_candidates_and_promotes_deterministic_winner(
+    git_repository: Path,
+) -> None:
+    write_spec(git_repository, kind="self-improvement")
+    git(git_repository, "add", "SPEC.json")
+    git(git_repository, "commit", "-m", "request ranked self improvement")
+    agent_code = (
+        "from pathlib import Path; "
+        "candidate = Path.cwd().name.split('-', 1)[0]; "
+        "Path('candidate.txt').write_text(candidate + '\\n')"
+    )
+    gate_code = (
+        "from pathlib import Path; "
+        "candidate = Path('candidate.txt'); "
+        "raise SystemExit(0 if candidate.is_file() "
+        "and candidate.read_text().strip() != '003' else 1)"
+    )
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(
+            git_repository,
+            gate_exit=0,
+            gate_code=gate_code,
+            agent_code=agent_code,
+            max_candidates=3,
+        ),
+    )
+
+    outcome = orchestrator.reconcile_once()
+
+    assert outcome.status == "succeeded", outcome.detail
+    assert (git_repository / "candidate.txt").read_text(encoding="utf-8") == "001\n"
+    state = orchestrator.store.status()
+    rankings = sorted(state["candidate_rankings"], key=lambda row: row["rank"])
+    assert [
+        (
+            row["candidate_id"],
+            row["rank"],
+            row["score"],
+            row["eligible"],
+            row["selected"],
+        )
+        for row in rankings
+    ] == [
+        ("candidate-001", 1, 1, True, True),
+        ("candidate-002", 2, 1, True, False),
+        ("candidate-003", 3, 0, False, False),
+    ]
+    assert len({row["worktree"] for row in rankings}) == 3
+    assert not Path(rankings[0]["worktree"]).exists()
+    assert Path(rankings[1]["worktree"]).exists()
+    assert Path(rankings[2]["worktree"]).exists()
+    assert state["promotion_decisions"] == [
+        {
+            "run_id": outcome.run_id,
+            "candidate_id": "candidate-001",
+            "candidate_commit": rankings[0]["candidate_commit"],
+            "decision": "promoted",
+            "promoted_commit": rankings[0]["candidate_commit"],
+            "updated_at": state["promotion_decisions"][0]["updated_at"],
+        }
+    ]
+
+
+def test_self_improvement_candidate_timeout_prevents_promotion(
+    git_repository: Path,
+) -> None:
+    write_spec(git_repository, kind="self-improvement")
+    git(git_repository, "add", "SPEC.json")
+    git(git_repository, "commit", "-m", "request bounded self improvement")
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(
+            git_repository,
+            gate_exit=0,
+            agent_code="import time; time.sleep(2)",
+            max_candidates=2,
+            candidate_timeout_seconds=1,
+        ),
+    )
+    base = current_commit(git_repository)
+
+    outcome = orchestrator.reconcile_once()
+
+    assert outcome.status == "failed"
+    assert outcome.detail == "no eligible self-improvement candidate"
+    assert current_commit(git_repository) == base
+    state = orchestrator.store.status()
+    rankings = sorted(state["candidate_rankings"], key=lambda row: row["rank"])
+    assert len(rankings) == 2
+    assert all(row["classification"] == "timed-out" for row in rankings)
+    assert all(row["score"] == 0 and not row["eligible"] for row in rankings)
+    assert all(row["gate_results"] == {"result": None} for row in rankings)
+    assert [row["candidate_id"] for row in rankings] == [
+        "candidate-001",
+        "candidate-002",
+    ]
+    assert state["promotion_decisions"][0]["decision"] == "no-eligible-candidate"
+    assert state["promotion_decisions"][0]["candidate_id"] is None
