@@ -18,6 +18,8 @@ The controller applies these boundaries:
 - It isolates agent edits in a Git worktree.
 - It bounds self-improvement candidate count and combined child-process time
   through local configuration.
+- It rejects more than 8 candidates, more than 7200 seconds for one candidate,
+  or more than 14400 configured candidate-seconds for one run.
 - It creates each self-improvement candidate from the claimed base commit in a
   separate worktree.
 - It acquires one renewable controller owner token and generation for the state

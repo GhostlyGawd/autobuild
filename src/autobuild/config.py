@@ -9,6 +9,10 @@ from typing import Any
 
 from .models import Gate
 
+_MAX_SELF_IMPROVEMENT_CANDIDATES = 8
+_MAX_SELF_IMPROVEMENT_CANDIDATE_SECONDS = 7_200
+_MAX_SELF_IMPROVEMENT_TOTAL_SECONDS = 14_400
+
 
 class ConfigError(ValueError):
     """The configuration is invalid."""
@@ -49,10 +53,18 @@ class Config:
     gates: tuple[Gate, ...]
 
 
-def _require_int(data: dict[str, Any], name: str, *, minimum: int = 1) -> int:
+def _require_int(
+    data: dict[str, Any],
+    name: str,
+    *,
+    minimum: int = 1,
+    maximum: int | None = None,
+) -> int:
     value = data.get(name)
     if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
         raise ConfigError(f"{name} must be an integer greater than or equal to {minimum}")
+    if maximum is not None and value > maximum:
+        raise ConfigError(f"{name} must be an integer less than or equal to {maximum}")
     return value
 
 
@@ -114,6 +126,24 @@ def load_config(root: Path, path: Path | None = None) -> Config:
         )
     if len({gate.name for gate in gates}) != len(gates):
         raise ConfigError("gate names must be unique")
+    max_candidates = _require_int(
+        self_improvement_data,
+        "max_candidates",
+        maximum=_MAX_SELF_IMPROVEMENT_CANDIDATES,
+    )
+    candidate_timeout_seconds = _require_int(
+        self_improvement_data,
+        "candidate_timeout_seconds",
+        maximum=_MAX_SELF_IMPROVEMENT_CANDIDATE_SECONDS,
+    )
+    if (
+        max_candidates * candidate_timeout_seconds
+        > _MAX_SELF_IMPROVEMENT_TOTAL_SECONDS
+    ):
+        raise ConfigError(
+            "self-improvement candidate count times timeout must be less than "
+            f"or equal to {_MAX_SELF_IMPROVEMENT_TOTAL_SECONDS} seconds"
+        )
 
     return Config(
         root=root,
@@ -138,11 +168,8 @@ def load_config(root: Path, path: Path | None = None) -> Config:
             ),
         ),
         self_improvement=SelfImprovementConfig(
-            max_candidates=_require_int(self_improvement_data, "max_candidates"),
-            candidate_timeout_seconds=_require_int(
-                self_improvement_data,
-                "candidate_timeout_seconds",
-            ),
+            max_candidates=max_candidates,
+            candidate_timeout_seconds=candidate_timeout_seconds,
         ),
         gates=tuple(gates),
     )

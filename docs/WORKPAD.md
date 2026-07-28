@@ -188,6 +188,9 @@ Alignment review for `ranked-self-improvement-experiments`:
   then ascending candidate ID. Only an unchanged, all-pass, non-regressing
   candidate is eligible, and the database permits at most one selected row for
   each run.
+- Primary review repaired a resource-policy omission. Configuration now
+  rejects more than 8 candidates, more than 7200 seconds for one candidate, or
+  more than 14400 configured candidate-seconds for one run.
 - Documentation-only drift repaired: README, architecture, security, lifecycle
   behavior, and the execution-loop visual now describe bounded candidate
   fan-out, ranking, winner cleanup, and preserved non-winner worktrees.
@@ -253,6 +256,7 @@ Evidence recorded on 2026-07-28:
 | Evaluate unchanged failure | Baseline and candidate gate fail | Record zero delta and no improvement | Baseline and evaluation events | `test_self_improvement_does_not_call_an_unchanged_failure_a_regression` |
 | Rank three candidates | Two eligible candidates have equal scores | Select candidate-001 and promote only it | Candidate rows, ranks, selection, promotion decision, and preserved non-winners | `test_self_improvement_ranks_candidates_and_promotes_deterministic_winner` |
 | Exhaust candidate budgets | Both agents exceed the per-candidate duration | Record complete not-run gate vectors and refuse promotion | Timed-out candidate rows, rankings, no-eligible decision, and unchanged Git | `test_self_improvement_candidate_timeout_prevents_promotion` |
+| Exceed experiment policy | Candidate count, one-candidate timeout, or aggregate candidate-seconds exceed a hard ceiling | Reject configuration before dispatch | Configuration error assertions | `test_config_requires_bounded_self_improvement_policy` |
 | Record experiment evidence | Run generation differs | Reject the candidate evidence mutation | Empty candidate ranking projection | `test_stale_generation_cannot_change_experiment_evidence` |
 | Add unrelated desired work | Full SPEC digest changes; item digest stays stable | Keep achieved item achieved | SQLite item state | `test_success_marks_item_achieved` |
 | Change an achieved item | Canonical item digest changes | Return the item to ready | SQLite item state | `test_success_marks_item_achieved` |
@@ -424,6 +428,18 @@ Ranked self-improvement implementation evidence recorded on 2026-07-28:
 - Pytest emitted the known ignored Windows permission warning while its exit
   cleanup inspected an ambient temporary-directory link. The test command
   returned success and did not change repository files.
+- The controller promoted commit `6ca252d` and cleaned its successful worktree.
+- The live state database recorded controller acquisition and release for
+  generation 1 and the resolved repository. Status reports that lease inactive.
+- This bootstrap cycle ran the prior single-candidate controller code. The new
+  candidate-ranking tables are therefore empty for that cycle. A later
+  self-improvement run must dogfood the multi-candidate path.
+- Primary review added hard candidate-count, per-candidate duration, and
+  aggregate candidate-seconds ceilings.
+- The post-review suite passed 52 tests. Ruff, repository validation, lifecycle
+  schema validation, and the writing precheck passed.
+- Primary Codeweb review found no new cycle, confirmed duplication, or lost
+  caller.
 
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
@@ -454,10 +470,8 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: the bounded worker implemented ranked self-improvement experiments.
-The complete repository suite, lint, writing precheck, and semantic validation
-pass.
+Status: the controller promoted ranked self-improvement experiments. Primary
+review added hard resource ceilings and passed the complete gate set.
 
-Next owner and action: review the ranked candidate policy and deterministic
-evidence, then let the controller decide promotion under the current lease and
-base-commit checks.
+Next owner and action: commit and push the review follow-up. Then add a bounded
+quality-metric item and use it to dogfood the new multi-candidate path.

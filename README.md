@@ -82,6 +82,8 @@ The `[self_improvement]` table sets `max_candidates` and
 `candidate_timeout_seconds`. The timeout bounds the combined child-process
 time for the agent and gates of each candidate. The default policy evaluates
 at most three candidates and gives each candidate at most 3600 seconds.
+The runtime permits at most 8 candidates, at most 7200 seconds for one
+candidate, and at most 14400 configured candidate-seconds for one run.
 
 ## Project contract
 

@@ -111,6 +111,11 @@ combined agent-and-gate process-time budget for each candidate. The controller
 creates each candidate from the claimed base commit in a separate Git worktree.
 One candidate cannot change another candidate's source state.
 
+The runtime adds hard ceilings to the configured values. One run can request
+at most 8 candidates. One candidate can request at most 7200 seconds. The
+candidate count multiplied by the per-candidate timeout cannot exceed 14400
+seconds.
+
 The controller runs all gates against the base before dispatch. It then runs
 all configured gates for each candidate while its process-time budget remains.
 The deterministic score is the number of passed gates. An eligible candidate

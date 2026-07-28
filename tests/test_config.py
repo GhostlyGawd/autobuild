@@ -96,6 +96,63 @@ timeout_seconds = 10
     ):
         load_config(tmp_path)
 
+    too_many_candidates = invalid_duration.replace(
+        "max_candidates = 2",
+        "max_candidates = 9",
+    ).replace(
+        "candidate_timeout_seconds = 0",
+        "candidate_timeout_seconds = 20",
+    )
+    (config_dir / "config.toml").write_text(
+        too_many_candidates,
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ConfigError,
+        match="max_candidates must be an integer less than or equal to 8",
+    ):
+        load_config(tmp_path)
+
+    excessive_candidate_timeout = too_many_candidates.replace(
+        "max_candidates = 9",
+        "max_candidates = 2",
+    ).replace(
+        "candidate_timeout_seconds = 20",
+        "candidate_timeout_seconds = 7201",
+    )
+    (config_dir / "config.toml").write_text(
+        excessive_candidate_timeout,
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ConfigError,
+        match=(
+            "candidate_timeout_seconds must be an integer less than or equal "
+            "to 7200"
+        ),
+    ):
+        load_config(tmp_path)
+
+    excessive_total_timeout = excessive_candidate_timeout.replace(
+        "max_candidates = 2",
+        "max_candidates = 8",
+    ).replace(
+        "candidate_timeout_seconds = 7201",
+        "candidate_timeout_seconds = 2000",
+    )
+    (config_dir / "config.toml").write_text(
+        excessive_total_timeout,
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ConfigError,
+        match=(
+            "self-improvement candidate count times timeout must be less than "
+            "or equal to 14400 seconds"
+        ),
+    ):
+        load_config(tmp_path)
+
 
 def test_config_rejects_duplicate_gate_names(tmp_path: Path) -> None:
     config_dir = tmp_path / ".autobuild"
