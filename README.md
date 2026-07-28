@@ -14,6 +14,10 @@ but the project is not production-ready.
 - Uses a canonical digest for each work item to retain unrelated achievements.
 - Uses the full `SPEC.json` digest to fence each active run.
 - Keeps execution state and evidence in SQLite.
+- Uses a renewable controller owner token and generation for each state database
+  and resolved base repository.
+- Defers a second controller while the current controller ownership lease is
+  valid.
 - Reconciles desired state instead of trusting a worker process.
 - Uses lease generations to reject stale worker events.
 - Revalidates the full SPEC digest, base commit, lease generation, and lease
@@ -29,6 +33,8 @@ but the project is not production-ready.
   plugin autoloading.
 - Rejects a candidate if a gate changes the committed content.
 - Revalidates the SPEC and base commit before dispatch and promotion.
+- Holds the SQLite controller-ownership transaction while it performs local
+  promotion.
 - Cleans a successful worktree only after reachability, path, registration, and
   clean-state checks pass.
 - Uses the same path for product work and bounded self-improvement.
@@ -53,6 +59,8 @@ python -m venv .venv
 ```
 
 On macOS or Linux, use `.venv/bin/python` and `.venv/bin/autobuild`.
+The `status` command inspects current state without acquiring controller
+ownership or synchronizing desired state into SQLite.
 
 Run one reconciliation cycle:
 
@@ -86,9 +94,15 @@ changes. Each agent and gate heartbeat also checks the run generation and lease
 time. An authority loss makes the run stale before candidate evaluation or
 promotion can continue.
 
+Before it synchronizes or dispatches work, the controller acquires a renewable
+SQLite ownership lease for the resolved base repository. Each state mutation
+checks the controller owner token and generation. A replacement controller can
+acquire a higher generation only after graceful release or lease expiry.
+
 ## Important limitations
 
-- The harness currently supports one local controller for each state database.
+- Controller ownership uses local SQLite transactions and wall-clock expiry. It
+  is not a distributed consensus protocol.
 - Promotion is local and fast-forward only.
 - A configured agent can change files inside its worktree.
 - Sandbox strength depends on the configured agent and operating system.

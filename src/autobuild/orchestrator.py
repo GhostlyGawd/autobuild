@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
 from contextlib import suppress
 from pathlib import Path
 
@@ -18,10 +19,16 @@ from .gitops import (
     is_clean,
     promote_fast_forward,
 )
-from .models import AuthorityLossCause, RunOutcome, RunStatus, WorkKind
+from .models import (
+    AuthorityLossCause,
+    ControllerLease,
+    RunOutcome,
+    RunStatus,
+    WorkKind,
+)
 from .process import gate_environment, redact_text, run_gate, safe_environment
 from .spec import load_spec
-from .state import StaleLeaseError, StateStore
+from .state import ControllerLeaseError, StaleLeaseError, StateStore
 
 
 class Orchestrator:
@@ -32,8 +39,31 @@ class Orchestrator:
 
     def reconcile_once(self, *, kind: WorkKind | None = None) -> RunOutcome:
         self.store.initialize()
+        try:
+            controller_lease = self.store.acquire_controller_lease(
+                self.root,
+                self.config.lease_seconds,
+                owner_id=str(uuid.uuid4()),
+            )
+        except ControllerLeaseError as error:
+            return RunOutcome(None, "deferred", str(error))
+        try:
+            return self._reconcile_owned(controller_lease, kind=kind)
+        finally:
+            with suppress(Exception):
+                self.store.release_controller_lease(controller_lease)
+
+    def _reconcile_owned(
+        self,
+        controller_lease: ControllerLease,
+        *,
+        kind: WorkKind | None = None,
+    ) -> RunOutcome:
         specification = load_spec(self.root / "SPEC.json")
-        self.store.sync_spec(specification)
+        self.store.sync_spec(
+            specification,
+            controller_lease=controller_lease,
+        )
         if not is_clean(self.root):
             return RunOutcome(None, "deferred", "base repository has uncommitted changes")
         base_commit = current_commit(self.root)
@@ -42,6 +72,7 @@ class Orchestrator:
             base_commit,
             self.config.lease_seconds,
             self.config.max_attempts,
+            controller_lease=controller_lease,
             kind=kind,
         )
         if claim is None:
@@ -63,7 +94,11 @@ class Orchestrator:
 
         authority_loss = source_authority_loss()
         if authority_loss is not None:
-            self.store.expire_claim(claim, authority_loss)
+            self.store.expire_claim(
+                claim,
+                authority_loss,
+                controller_lease=controller_lease,
+            )
             detail = f"authority lost: {authority_loss.value}"
             return RunOutcome(claim.run_id, "stale", detail)
 
@@ -82,7 +117,15 @@ class Orchestrator:
                         f"run {claim.run_id} lost source authority",
                         authority_loss,
                     )
-                self.store.renew_lease(claim, self.config.lease_seconds)
+                self.store.renew_controller_lease(
+                    controller_lease,
+                    self.config.lease_seconds,
+                )
+                self.store.renew_lease(
+                    claim,
+                    self.config.lease_seconds,
+                    controller_lease=controller_lease,
+                )
 
             baseline_results: dict[str, bool] = {}
             if claim.work_item.kind is WorkKind.SELF_IMPROVEMENT:
@@ -123,12 +166,14 @@ class Orchestrator:
                                 self.config.policy.redacted_name_fragments,
                             ),
                         },
+                        controller_lease=controller_lease,
                     )
                 if not is_clean(self.root):
                     self.store.transition(
                         claim,
                         RunStatus.LEASED,
                         RunStatus.FAILED,
+                        controller_lease=controller_lease,
                         detail="baseline gates changed the base repository",
                     )
                     return RunOutcome(
@@ -146,7 +191,11 @@ class Orchestrator:
             )
             authority_loss = source_authority_loss()
             if authority_loss is not None:
-                self.store.expire_claim(claim, authority_loss)
+                self.store.expire_claim(
+                    claim,
+                    authority_loss,
+                    controller_lease=controller_lease,
+                )
                 detail = f"authority lost: {authority_loss.value}"
                 return RunOutcome(
                     claim.run_id,
@@ -159,6 +208,7 @@ class Orchestrator:
                     claim,
                     RunStatus.LEASED,
                     RunStatus.STALE,
+                    controller_lease=controller_lease,
                     detail="desired state changed at dispatch",
                     worktree=worktree.path,
                 )
@@ -172,6 +222,7 @@ class Orchestrator:
                 claim,
                 RunStatus.LEASED,
                 RunStatus.EXECUTING,
+                controller_lease=controller_lease,
                 worktree=worktree.path,
             )
             execution_state = RunStatus.EXECUTING
@@ -202,12 +253,14 @@ class Orchestrator:
                         self.config.policy.redacted_name_fragments,
                     ),
                 },
+                controller_lease=controller_lease,
             )
             if not result.passed:
                 self.store.transition(
                     claim,
                     RunStatus.EXECUTING,
                     RunStatus.FAILED,
+                    controller_lease=controller_lease,
                     detail="agent process failed or timed out",
                 )
                 return RunOutcome(
@@ -222,7 +275,12 @@ class Orchestrator:
                 worktree, f"autobuild: complete {claim.work_item.id}"
             )
             revalidate_authority()
-            self.store.transition(claim, RunStatus.EXECUTING, RunStatus.EVALUATING)
+            self.store.transition(
+                claim,
+                RunStatus.EXECUTING,
+                RunStatus.EVALUATING,
+                controller_lease=controller_lease,
+            )
             execution_state = RunStatus.EVALUATING
             evaluation_environment = gate_environment(environment, worktree.path)
             candidate_results: dict[str, bool] = {}
@@ -252,6 +310,7 @@ class Orchestrator:
                             self.config.policy.redacted_name_fragments,
                         ),
                     },
+                    controller_lease=controller_lease,
                 )
                 candidate_results[gate.name] = gate_result.passed
                 if not gate_result.passed:
@@ -274,11 +333,13 @@ class Orchestrator:
                                 "candidate_gates": candidate_results,
                                 "gate_pass_deltas": gate_pass_deltas,
                             },
+                            controller_lease=controller_lease,
                         )
                     self.store.transition(
                         claim,
                         RunStatus.EVALUATING,
                         RunStatus.FAILED,
+                        controller_lease=controller_lease,
                         detail=f"gate failed: {gate.name}",
                     )
                     return RunOutcome(
@@ -293,6 +354,7 @@ class Orchestrator:
                     claim,
                     RunStatus.EVALUATING,
                     RunStatus.FAILED,
+                    controller_lease=controller_lease,
                     detail="verification gates changed the candidate",
                 )
                 return RunOutcome(
@@ -323,10 +385,15 @@ class Orchestrator:
                         "gate_pass_deltas": gate_pass_deltas,
                         "passing_gate_count_delta": passing_gate_count_delta,
                     },
+                    controller_lease=controller_lease,
                 )
             authority_loss = source_authority_loss()
             if authority_loss is not None:
-                self.store.expire_claim(claim, authority_loss)
+                self.store.expire_claim(
+                    claim,
+                    authority_loss,
+                    controller_lease=controller_lease,
+                )
                 detail = f"authority lost: {authority_loss.value}"
                 return RunOutcome(
                     claim.run_id,
@@ -339,6 +406,7 @@ class Orchestrator:
                     claim,
                     RunStatus.EVALUATING,
                     RunStatus.STALE,
+                    controller_lease=controller_lease,
                     detail="desired state changed before promotion",
                 )
                 return RunOutcome(
@@ -347,7 +415,12 @@ class Orchestrator:
                     "desired state changed before promotion",
                     worktree.path,
                 )
-            self.store.transition(claim, RunStatus.EVALUATING, RunStatus.PROMOTING)
+            self.store.transition(
+                claim,
+                RunStatus.EVALUATING,
+                RunStatus.PROMOTING,
+                controller_lease=controller_lease,
+            )
             execution_state = RunStatus.PROMOTING
             revalidate_authority()
             if not self.config.auto_promote:
@@ -355,6 +428,7 @@ class Orchestrator:
                     claim,
                     RunStatus.PROMOTING,
                     RunStatus.AWAITING_PROMOTION,
+                    controller_lease=controller_lease,
                     detail=f"verified candidate {candidate}",
                 )
                 return RunOutcome(
@@ -363,11 +437,20 @@ class Orchestrator:
                     f"verified candidate {candidate}",
                     worktree.path,
                 )
-            promoted = promote_fast_forward(self.root, worktree, claim.base_commit)
+            with self.store.controller_operation(
+                controller_lease,
+                self.config.lease_seconds,
+            ):
+                promoted = promote_fast_forward(
+                    self.root,
+                    worktree,
+                    claim.base_commit,
+                )
             self.store.transition(
                 claim,
                 RunStatus.PROMOTING,
                 RunStatus.SUCCEEDED,
+                controller_lease=controller_lease,
                 detail=f"promoted {promoted}",
             )
             detail = f"promoted {promoted}"
@@ -383,6 +466,7 @@ class Orchestrator:
                         claim,
                         "worktree_cleaned",
                         {"path": str(worktree.path), "branch": worktree.branch},
+                        controller_lease=controller_lease,
                     )
                     detail += "; successful worktree cleaned"
                 except GitError as cleanup_error:
@@ -390,6 +474,7 @@ class Orchestrator:
                         claim,
                         "worktree_cleanup_failed",
                         {"detail": str(cleanup_error)},
+                        controller_lease=controller_lease,
                     )
                     detail += f"; cleanup preserved: {cleanup_error}"
             return RunOutcome(
@@ -398,8 +483,20 @@ class Orchestrator:
                 detail,
                 worktree.path,
             )
+        except ControllerLeaseError:
+            return RunOutcome(
+                claim.run_id,
+                "deferred",
+                "controller ownership was lost; recovery requires lease expiry",
+                worktree.path if worktree else None,
+            )
         except StaleLeaseError as error:
-            self.store.expire_claim(claim, error.cause)
+            with suppress(ControllerLeaseError):
+                self.store.expire_claim(
+                    claim,
+                    error.cause,
+                    controller_lease=controller_lease,
+                )
             detail = f"authority lost: {error.cause.value}"
             return RunOutcome(
                 claim.run_id,
@@ -413,6 +510,7 @@ class Orchestrator:
                     claim,
                     execution_state,
                     RunStatus.FAILED,
+                    controller_lease=controller_lease,
                     detail=f"git error: {error}",
                 )
             return RunOutcome(
@@ -431,6 +529,7 @@ class Orchestrator:
                     claim,
                     execution_state,
                     RunStatus.FAILED,
+                    controller_lease=controller_lease,
                     detail=detail,
                 )
             return RunOutcome(

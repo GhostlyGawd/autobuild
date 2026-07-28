@@ -73,15 +73,39 @@ def main(arguments: Sequence[str] | None = None) -> int:
 
     config = load_config(root)
     store = StateStore(config.state_path)
-    store.initialize()
     specification = load_spec(root / "SPEC.json")
-    store.sync_spec(specification)
 
     if args.command == "status":
+        state = store.status()
+        stored_items = {
+            str(item["id"]): item for item in state["work_items"]
+        }
+        work_items = []
+        for item in sorted(
+            specification.work_items,
+            key=lambda candidate: (-candidate.priority, candidate.id),
+        ):
+            work_items.append(
+                stored_items.pop(
+                    item.id,
+                    {
+                        "id": item.id,
+                        "kind": item.kind.value,
+                        "priority": item.priority,
+                        "status": "ready",
+                        "attempt_count": 0,
+                        "updated_at": None,
+                    },
+                )
+            )
+        work_items.extend(
+            stored_items[item_id] for item_id in sorted(stored_items)
+        )
         payload = {
             "objective": specification.objective,
             "spec_digest": specification.digest,
-            **store.status(),
+            **state,
+            "work_items": work_items,
         }
         if args.as_json:
             print(json.dumps(payload, indent=2, sort_keys=True))

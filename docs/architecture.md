@@ -6,12 +6,12 @@
 flowchart LR
     S[SPEC.json<br/>desired outcomes] --> R[Reconciler]
     G[Git base commit<br/>source state] --> R
-    D[(SQLite<br/>leases and evidence)] <--> R
+    D[(SQLite<br/>controller/run leases<br/>and evidence)] <--> R
     R -->|fenced claim| W[Isolated Git worktree]
     W --> A[Bounded agent process]
     A --> C[Candidate commit]
     C --> E[Verification gates]
-    A -. heartbeat .-> Q{SPEC, Git, generation,<br/>and lease current?}
+    A -. heartbeat .-> Q{Controller, SPEC, Git,<br/>generations, and leases current?}
     E -. heartbeat .-> Q
     Q -->|no: stop child| H
     Q -. yes: continue .-> A
@@ -40,6 +40,7 @@ visual source.
 
 | State | Authoritative owner | Worker authority |
 |---|---|---|
+| Controller ownership | SQLite owner token, repository identity, generation, and expiry | None |
 | Desired outcomes | `SPEC.json` at the observed full digest | Read only |
 | Achieved item revision | Canonical work-item digest in SQLite | None |
 | Source revision | Git base repository | Changes only its worktree |
@@ -49,6 +50,13 @@ visual source.
 
 The controller uses an observation, comparison, action, and re-observation loop.
 A process exit is execution evidence. It is not semantic success.
+
+Before it synchronizes desired state or claims work, a controller acquires the
+singleton ownership lease in the state database. The lease binds the state
+database to the resolved base repository, owner token, generation, and expiry.
+A second controller cannot acquire ownership while that lease is current.
+Graceful completion expires the lease. A replacement controller can acquire a
+higher generation after a crash lease expires.
 
 The controller uses two specification digests. It hashes the exact
 `SPEC.json` bytes to fence an active run. It also hashes the canonical JSON for
@@ -61,18 +69,23 @@ achieved row only when its stored digest equals the current full specification
 digest. It then stores the canonical item digest without reopening the item. A
 simultaneous specification change causes conservative reopening.
 
-Each agent and gate heartbeat reads the full `SPEC.json` digest and base Git
-commit. It also validates the stored run generation and lease time. The
-controller renews the lease only if all four authority checks pass. A failed
-check stops the child, makes the run stale, and records an `authority_lost`
-event with one bounded cause. The bounded causes are `spec-digest-changed`,
-`base-commit-changed`, `lease-generation-changed`, `lease-expired`, and
-`run-not-active`.
+Each agent and gate heartbeat first reads the full `SPEC.json` digest and base
+Git commit. It then renews the controller ownership lease and validates the
+stored run generation and lease time. A failed check stops the child and
+prevents later state mutation. Source or run authority loss makes the run stale
+and records an `authority_lost` event with one bounded cause. The bounded causes
+are `spec-digest-changed`, `base-commit-changed`,
+`lease-generation-changed`, `lease-expired`, and `run-not-active`.
 
 The controller repeats the same authority revalidation at child completion and
 at controller boundaries before it records evidence, commits a candidate,
 starts evaluation, or promotes. Therefore, an authority loss during an agent
 or gate process cannot produce later candidate evaluation or promotion.
+
+Promotion starts only after the current controller lease passes validation.
+The controller holds an immediate SQLite transaction during the fast-forward
+operation. This transaction prevents another controller from acquiring
+ownership during the Git mutation.
 
 The process runner resolves each configured executable to an explicit path
 before launch. This rule prevents Windows process creation from selecting a
@@ -101,11 +114,16 @@ A positive total is an `improvement`. A zero total is a `non-regression`.
 
 ## Recovery
 
-The state database uses SQLite WAL mode. A controller restart reads current
-leases and run states. An expired nonterminal run becomes stale, and its work
-item becomes eligible for a new generation. Stale events cannot update the new
-run. Failed and stale worktrees remain available until a later, explicit
-cleanup policy has semantic evidence that they are disposable.
+The state database uses SQLite WAL mode. A controller restart cannot mutate
+state while another controller lease is current. After expiry, the replacement
+controller acquires a higher controller generation. It then reads current run
+states.
+
+An expired nonterminal run becomes stale, and its work item becomes
+eligible for a new generation. Stale controller generations and stale run
+events cannot update current state. Failed and stale worktrees remain available
+until a later, explicit cleanup policy has semantic evidence that they are
+disposable.
 
 After a successful promotion, the controller can clean the successful
 worktree. It first checks path containment, clean state, candidate identity,
@@ -118,9 +136,8 @@ not discard the handoff evidence.
 
 ## Current limitations
 
-- One controller must own a state database.
-- The lease uses wall-clock time and does not provide a distributed consensus
-  guarantee.
+- Controller and run leases use wall-clock time and do not provide a
+  distributed consensus guarantee.
 - The Codex adapter is the only live agent adapter.
 - Promotion does not create pull requests or push changes.
 - The controller does not clean failed, stale, blocked, or manual-handoff

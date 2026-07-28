@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -13,6 +14,7 @@ import pytest
 from conftest import git, write_spec
 
 import autobuild.orchestrator as orchestrator_module
+import autobuild.state as state_module
 from autobuild.config import AgentConfig, Config, PolicyConfig
 from autobuild.gitops import GitError, current_commit
 from autobuild.models import Gate
@@ -178,6 +180,89 @@ def test_long_agent_renews_short_lease(git_repository: Path) -> None:
 
     assert outcome.status == "succeeded", outcome.detail
     assert orchestrator.store.status()["recent_runs"][0]["status"] == "succeeded"
+
+
+def test_concurrent_controller_cannot_dispatch_while_owner_is_current(
+    git_repository: Path,
+) -> None:
+    started_marker = git_repository.parent / "controller-agent-started"
+    agent_code = (
+        "import time; "
+        "from pathlib import Path; "
+        f"Path({str(started_marker)!r}).write_text('started'); "
+        "time.sleep(1.5); "
+        "Path('candidate.txt').write_text('candidate\\n')"
+    )
+    config = config_for(
+        git_repository,
+        gate_exit=0,
+        lease_seconds=5,
+        agent_code=agent_code,
+    )
+    first = Orchestrator(git_repository, config)
+    second = Orchestrator(git_repository, config)
+    first_outcomes = []
+
+    thread = threading.Thread(
+        target=lambda: first_outcomes.append(first.reconcile_once()),
+        daemon=True,
+    )
+    thread.start()
+    for _ in range(500):
+        if started_marker.exists():
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError("first controller did not dispatch its agent")
+
+    second_outcome = second.reconcile_once()
+    thread.join(timeout=10)
+
+    assert second_outcome.status == "deferred"
+    assert second_outcome.run_id is None
+    assert "another current owner" in second_outcome.detail
+    assert len(first_outcomes) == 1
+    assert first_outcomes[0].status == "succeeded"
+    with sqlite3.connect(config.state_path) as connection:
+        run_count = connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+    assert run_count == 1
+
+
+def test_controller_restart_recovers_after_ownership_expiry(
+    git_repository: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = datetime(2026, 7, 28, tzinfo=UTC)
+    monkeypatch.setattr(state_module, "_now", lambda: clock)
+    config = config_for(git_repository, gate_exit=0, lease_seconds=1)
+    crashed = Orchestrator(git_repository, config)
+    crashed.store.initialize()
+    crashed.store.acquire_controller_lease(
+        git_repository,
+        1,
+        owner_id="crashed-controller",
+    )
+
+    blocked = Orchestrator(git_repository, config).reconcile_once()
+    clock += timedelta(seconds=2)
+    recovered = Orchestrator(git_repository, config).reconcile_once()
+
+    assert blocked.status == "deferred"
+    assert recovered.status == "succeeded", recovered.detail
+    status = crashed.store.status()
+    assert status["controller_lease"]["active"] is False
+    with sqlite3.connect(config.state_path) as connection:
+        generations = [
+            json.loads(row[0])["generation"]
+            for row in connection.execute(
+                """
+                SELECT payload_json FROM events
+                WHERE kind = 'controller_acquired'
+                ORDER BY sequence
+                """
+            )
+        ]
+    assert generations == [1, 2]
 
 
 def test_dispatch_stops_after_spec_change(

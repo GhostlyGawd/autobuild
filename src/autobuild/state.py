@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import uuid
 from collections.abc import Iterator
@@ -10,7 +11,14 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .models import AuthorityLossCause, Claim, RunStatus, WorkItem, WorkKind
+from .models import (
+    AuthorityLossCause,
+    Claim,
+    ControllerLease,
+    RunStatus,
+    WorkItem,
+    WorkKind,
+)
 from .spec import Specification
 
 
@@ -24,6 +32,10 @@ class StaleLeaseError(RuntimeError):
     ) -> None:
         super().__init__(message)
         self.cause = cause
+
+
+class ControllerLeaseError(RuntimeError):
+    """A controller does not own the current repository lease."""
 
 
 def _now() -> datetime:
@@ -51,6 +63,17 @@ class StateStore:
         except BaseException:
             connection.rollback()
             raise
+        finally:
+            connection.close()
+
+    @contextmanager
+    def _read_only_connect(self) -> Iterator[sqlite3.Connection]:
+        uri = f"{self.path.resolve().as_uri()}?mode=ro"
+        connection = sqlite3.connect(uri, uri=True)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only = ON")
+        try:
+            yield connection
         finally:
             connection.close()
 
@@ -89,15 +112,241 @@ class StateStore:
                     payload_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS controller_lease (
+                    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    repository TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    generation INTEGER NOT NULL,
+                    lease_expires_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS runs_item_status
                     ON runs(work_item_id, status);
                 """
             )
 
-    def sync_spec(self, specification: Specification) -> None:
+    def acquire_controller_lease(
+        self,
+        repository: Path,
+        lease_seconds: int,
+        *,
+        owner_id: str,
+    ) -> ControllerLease:
+        repository_key = os.path.normcase(str(repository.resolve()))
+        with self._connect() as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError as error:
+                if error.sqlite_errorcode == sqlite3.SQLITE_BUSY:
+                    raise ControllerLeaseError(
+                        "controller ownership is held by an active operation"
+                    ) from error
+                raise
+            now_value = _now()
+            now = _timestamp(now_value)
+            lease_expires_at = _timestamp(
+                now_value + timedelta(seconds=lease_seconds)
+            )
+            current = connection.execute(
+                "SELECT * FROM controller_lease WHERE singleton = 1"
+            ).fetchone()
+            if (
+                current is not None
+                and current["lease_expires_at"] > now
+                and (
+                    current["owner_id"] != owner_id
+                    or current["repository"] != repository_key
+                )
+            ):
+                raise ControllerLeaseError(
+                    "controller ownership is held by another current owner"
+                )
+            generation = (
+                int(current["generation"])
+                if current is not None
+                and current["owner_id"] == owner_id
+                and current["repository"] == repository_key
+                and current["lease_expires_at"] > now
+                else int(current["generation"]) + 1
+                if current is not None
+                else 1
+            )
+            connection.execute(
+                """
+                INSERT INTO controller_lease(
+                    singleton, repository, owner_id, generation,
+                    lease_expires_at, updated_at
+                ) VALUES (1, ?, ?, ?, ?, ?)
+                ON CONFLICT(singleton) DO UPDATE SET
+                    repository = excluded.repository,
+                    owner_id = excluded.owner_id,
+                    generation = excluded.generation,
+                    lease_expires_at = excluded.lease_expires_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    repository_key,
+                    owner_id,
+                    generation,
+                    lease_expires_at,
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO events(run_id, kind, payload_json, created_at)
+                VALUES(NULL, 'controller_acquired', ?, ?)
+                """,
+                (json.dumps({"generation": generation}), now),
+            )
+        return ControllerLease(
+            owner_id=owner_id,
+            generation=generation,
+            repository=repository_key,
+            lease_expires_at=lease_expires_at,
+        )
+
+    def _require_controller_lease(
+        self,
+        connection: sqlite3.Connection,
+        controller_lease: ControllerLease,
+        now: str,
+    ) -> None:
+        current = connection.execute(
+            """
+            SELECT 1 FROM controller_lease
+            WHERE singleton = 1
+              AND repository = ?
+              AND owner_id = ?
+              AND generation = ?
+              AND lease_expires_at > ?
+            """,
+            (
+                controller_lease.repository,
+                controller_lease.owner_id,
+                controller_lease.generation,
+                now,
+            ),
+        ).fetchone()
+        if current is None:
+            raise ControllerLeaseError(
+                f"controller generation {controller_lease.generation} is not current"
+            )
+
+    def renew_controller_lease(
+        self,
+        controller_lease: ControllerLease,
+        lease_seconds: int,
+    ) -> None:
+        now_value = _now()
+        now = _timestamp(now_value)
+        lease_expires_at = _timestamp(now_value + timedelta(seconds=lease_seconds))
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_controller_lease(connection, controller_lease, now)
+            connection.execute(
+                """
+                UPDATE controller_lease
+                SET lease_expires_at = ?, updated_at = ?
+                WHERE singleton = 1
+                  AND repository = ?
+                  AND owner_id = ?
+                  AND generation = ?
+                """,
+                (
+                    lease_expires_at,
+                    now,
+                    controller_lease.repository,
+                    controller_lease.owner_id,
+                    controller_lease.generation,
+                ),
+            )
+
+    @contextmanager
+    def controller_operation(
+        self,
+        controller_lease: ControllerLease,
+        lease_seconds: int,
+    ) -> Iterator[None]:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_controller_lease(
+                connection,
+                controller_lease,
+                _timestamp(),
+            )
+            yield
+            now_value = _now()
+            now = _timestamp(now_value)
+            connection.execute(
+                """
+                UPDATE controller_lease
+                SET lease_expires_at = ?, updated_at = ?
+                WHERE singleton = 1
+                  AND repository = ?
+                  AND owner_id = ?
+                  AND generation = ?
+                """,
+                (
+                    _timestamp(now_value + timedelta(seconds=lease_seconds)),
+                    now,
+                    controller_lease.repository,
+                    controller_lease.owner_id,
+                    controller_lease.generation,
+                ),
+            )
+
+    def release_controller_lease(
+        self,
+        controller_lease: ControllerLease,
+    ) -> bool:
+        now = _timestamp()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE controller_lease
+                SET lease_expires_at = ?, updated_at = ?
+                WHERE singleton = 1
+                  AND repository = ?
+                  AND owner_id = ?
+                  AND generation = ?
+                  AND lease_expires_at > ?
+                """,
+                (
+                    now,
+                    now,
+                    controller_lease.repository,
+                    controller_lease.owner_id,
+                    controller_lease.generation,
+                    now,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return False
+            connection.execute(
+                """
+                INSERT INTO events(run_id, kind, payload_json, created_at)
+                VALUES(NULL, 'controller_released', ?, ?)
+                """,
+                (
+                    json.dumps({"generation": controller_lease.generation}),
+                    now,
+                ),
+            )
+            return True
+
+    def sync_spec(
+        self,
+        specification: Specification,
+        *,
+        controller_lease: ControllerLease,
+    ) -> None:
         now = _timestamp()
         desired_ids = {item.id for item in specification.work_items}
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_controller_lease(connection, controller_lease, now)
             for item in specification.work_items:
                 connection.execute(
                     """
@@ -197,6 +446,7 @@ class StateStore:
         lease_seconds: int,
         max_attempts: int,
         *,
+        controller_lease: ControllerLease,
         kind: WorkKind | None = None,
     ) -> Claim | None:
         now_value = _now()
@@ -204,6 +454,7 @@ class StateStore:
         lease_expires_at = _timestamp(now_value + timedelta(seconds=lease_seconds))
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            self._require_controller_lease(connection, controller_lease, now)
             self._expire_leases(connection, now)
             connection.execute(
                 """
@@ -294,11 +545,14 @@ class StateStore:
         expected: RunStatus,
         target: RunStatus,
         *,
+        controller_lease: ControllerLease,
         detail: str = "",
         worktree: Path | None = None,
     ) -> None:
         now = _timestamp()
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_controller_lease(connection, controller_lease, now)
             cursor = connection.execute(
                 """
                 UPDATE runs
@@ -349,11 +603,19 @@ class StateStore:
                     (now, claim.work_item.id),
                 )
 
-    def renew_lease(self, claim: Claim, lease_seconds: int) -> None:
+    def renew_lease(
+        self,
+        claim: Claim,
+        lease_seconds: int,
+        *,
+        controller_lease: ControllerLease,
+    ) -> None:
         now_value = _now()
         now = _timestamp(now_value)
         lease_expires_at = _timestamp(now_value + timedelta(seconds=lease_seconds))
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_controller_lease(connection, controller_lease, now)
             current = connection.execute(
                 """
                 SELECT generation, status, lease_expires_at
@@ -406,10 +668,14 @@ class StateStore:
         self,
         claim: Claim,
         cause: AuthorityLossCause,
+        *,
+        controller_lease: ControllerLease,
     ) -> bool:
         now = _timestamp()
         detail = f"authority lost: {cause.value}"
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_controller_lease(connection, controller_lease, now)
             cursor = connection.execute(
                 """
                 UPDATE runs
@@ -436,9 +702,18 @@ class StateStore:
             )
             return True
 
-    def record_event(self, claim: Claim, kind: str, payload: dict[str, object]) -> None:
+    def record_event(
+        self,
+        claim: Claim,
+        kind: str,
+        payload: dict[str, object],
+        *,
+        controller_lease: ControllerLease,
+    ) -> None:
         now = _timestamp()
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_controller_lease(connection, controller_lease, now)
             current = connection.execute(
                 """
                 SELECT 1 FROM runs
@@ -461,9 +736,13 @@ class StateStore:
         claim: Claim,
         kind: str,
         payload: dict[str, object],
+        *,
+        controller_lease: ControllerLease,
     ) -> None:
         now = _timestamp()
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_controller_lease(connection, controller_lease, now)
             current = connection.execute(
                 """
                 SELECT 1 FROM runs
@@ -482,8 +761,13 @@ class StateStore:
             )
 
     def status(self) -> dict[str, object]:
-        self.initialize()
-        with self._connect() as connection:
+        if not self.path.is_file():
+            return {
+                "controller_lease": None,
+                "work_items": [],
+                "recent_runs": [],
+            }
+        with self._read_only_connect() as connection:
             items = [
                 dict(row)
                 for row in connection.execute(
@@ -503,4 +787,25 @@ class StateStore:
                     """
                 )
             ]
-            return {"work_items": items, "recent_runs": runs}
+            try:
+                controller = connection.execute(
+                    """
+                    SELECT generation, lease_expires_at
+                    FROM controller_lease WHERE singleton = 1
+                    """
+                ).fetchone()
+            except sqlite3.OperationalError as error:
+                if "no such table: controller_lease" not in str(error):
+                    raise
+                controller = None
+            controller_status = None
+            if controller is not None:
+                controller_status = {
+                    **dict(controller),
+                    "active": controller["lease_expires_at"] > _timestamp(),
+                }
+            return {
+                "controller_lease": controller_status,
+                "work_items": items,
+                "recent_runs": runs,
+            }

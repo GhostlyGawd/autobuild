@@ -35,7 +35,7 @@
 - [x] Bind achieved state to canonical work-item revisions.
 - [x] Stop active children after desired-state or base-source authority loss.
 - [x] Make malformed child output nonfatal and deterministic.
-- [ ] Add a renewable controller ownership lease.
+- [x] Add a renewable controller ownership lease.
 - [ ] Add richer quality metrics and multi-candidate experiment ranking.
 
 ## Acceptance criteria
@@ -58,6 +58,7 @@
 | SPEC owns desired state | Required | `spec.py`, `orchestrator.py` | SPEC and orchestrator tests | README, architecture | Proven for current local flow |
 | Item revision owns achieved state | Required | `spec.py`, `state.py` | Item identity and migration tests | README, architecture, lifecycle contract | Proven |
 | SQLite owns leases and events | Required | `state.py` | State lifecycle tests | architecture | Proven for current local flow |
+| Controller ownership fences scheduling and promotion | Required | `models.py`, `state.py`, `orchestrator.py` | Controller concurrency, renewal, stale-owner, and restart tests | README, architecture, SECURITY, lifecycle contract | Proven for local SQLite controllers |
 | Generation fences stale events | Required | `state.py` | Stale and restart tests | lifecycle contract | Proven |
 | Fresh read before dispatch and promotion | Required | `orchestrator.py`, `gitops.py` | SPEC-change, base-change, and Git integration tests | architecture | Proven for tested local boundaries |
 | Active lease renewal and authority loss | Required | `models.py`, `process.py`, `state.py`, `orchestrator.py` | Full heartbeat, renewal, expiry, generation, and source-change tests | README, architecture, SECURITY, lifecycle contract | Proven for agent and gate callback paths |
@@ -151,6 +152,27 @@ Alignment review for child-output decoding:
 - Reviewed and unaffected: SPEC, lifecycle states, adapter authority,
   promotion, cleanup, release, license, provenance, and visuals do not change.
 
+Alignment review for `controller-ownership-lease`:
+
+- Required conflict repaired: scheduling and promotion previously relied only
+  on per-run leases and did not fence concurrent controller processes.
+- The state database now binds one current controller owner token and
+  generation to the resolved base repository. All scheduling mutations require
+  that current controller lease.
+- Promotion holds an immediate SQLite ownership transaction across the local
+  Git fast-forward operation.
+- Status and repository validation remain lease-free. Status no longer
+  synchronizes desired state into SQLite.
+- `SPEC.json` is reviewed and unaffected because it already defines this work
+  item's objective and acceptance criteria.
+- Setup commands remain valid. README now states the inspection-only status
+  behavior.
+- Release, license, provenance, contribution, support, adapter, process-output,
+  secret-redaction, cleanup, and writing-standard surfaces are reviewed and
+  unaffected because controller ownership does not change those contracts.
+- The architecture visual now includes the controller lease and promotion
+  ownership boundary.
+
 ## Implementation progress
 
 The bootstrap reconciler provides a standard-library runtime and a Codex CLI
@@ -205,6 +227,10 @@ Evidence recorded on 2026-07-28:
 | Add unrelated desired work | Full SPEC digest changes; item digest stays stable | Keep achieved item achieved | SQLite item state | `test_success_marks_item_achieved` |
 | Change an achieved item | Canonical item digest changes | Return the item to ready | SQLite item state | `test_success_marks_item_achieved` |
 | Migrate legacy identity | Stored item digest equals current full SPEC digest | Retain achieved state and store the item digest | SQLite digest and state | `test_sync_migrates_legacy_full_spec_digest_without_reopening` |
+| Start two controllers | First controller lease remains current | Defer the second controller before run creation or promotion | Controller acquisition event and one run row | `test_concurrent_controller_cannot_dispatch_while_owner_is_current` |
+| Replace a crashed controller | Prior controller lease expires | Acquire a higher controller generation and complete reconciliation | Controller acquisition generations and recovered run | `test_controller_restart_recovers_after_ownership_expiry` |
+| Mutate with a stale controller | Another controller acquires after expiry | Reject state transition and promotion operation | SQLite controller row and typed rejection | `test_controller_lease_renews_and_fences_state_mutation` |
+| Inspect status during ownership | Another controller lease remains current | Return status without acquiring or changing ownership | Controller lease status projection | `test_controller_lease_is_exclusive_and_recovers_after_expiry` |
 
 Commands and outcomes:
 
@@ -309,6 +335,30 @@ Controller-ownership generation 1 evidence recorded on 2026-07-28:
   precheck passed.
 - Codeweb found no new cycle, confirmed duplication, or lost caller.
 
+Controller ownership lease implementation evidence recorded on 2026-07-28:
+
+- This bounded worker started from
+  `6d4fd2771c7e4f2d3e258cfbb9cb11d7739c66fc`.
+- The focused state, orchestrator, validation, and configuration suite passed
+  28 tests.
+- `PYTHONPATH=src PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest` passed all
+  46 tests.
+- The exact unconfigured `python -m pytest` command could not import the
+  `src`-layout package because this worktree is not installed in the ambient
+  Python environment. The supported source-path run passed.
+- `python -m ruff check .` passed.
+- `PYTHONPATH=src python -m autobuild writing-check` found no automated
+  findings. Its final status remained
+  `NOT RELEASED — COMPLIANCE CHECK INCOMPLETE`.
+- `PYTHONPATH=src python -m autobuild validate --skip-git-clean` passed
+  configuration, SPEC, executable, and Draft 2020-12 lifecycle-contract
+  checks.
+- `PYTHONPATH=src python -m autobuild status --json` projected all desired
+  items and left the state database modification time unchanged.
+- Codeweb structural calls were unavailable because the bounded worker tool
+  calls were cancelled. Direct diff review, Ruff, lifecycle schema validation,
+  and the complete test suite provide the available structural evidence.
+
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
 autoloading. A fresh project virtual environment remains the supported setup.
@@ -328,6 +378,9 @@ autoloading. A fresh project virtual environment remains the supported setup.
   preserved. It proves lease recovery and exposed the source-path defect.
 - Controller-ownership generation 1 is terminal failed. Its uncommitted
   candidate remains preserved after the child-output decoding defect.
+- Pytest passed all tests but emitted an ignored Windows permission warning
+  while its process-exit cleanup inspected an ambient temporary-directory
+  link. The warning did not change the test exit status or repository files.
 
 ## Blockers
 
@@ -335,9 +388,9 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: controller-ownership generation 1 failed after its worker completed.
-The process-runner decoding defect is repaired with a regression test.
+Status: the bounded `controller-ownership-lease` implementation is complete in
+this worktree. Focused and complete tests pass.
 
-Next owner and action: the autonomous orchestrator must validate, commit, and
-push the process fix, then retry `controller-ownership-lease` with a new
-generation.
+Next owner and action: review this uncommitted worktree and promote it through
+the owning controller. This bounded worker did not merge, push, or delete the
+worktree.

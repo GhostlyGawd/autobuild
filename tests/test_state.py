@@ -9,9 +9,15 @@ from pathlib import Path
 import pytest
 
 import autobuild.state as state_module
-from autobuild.models import AuthorityLossCause, RunStatus, WorkItem, WorkKind
+from autobuild.models import (
+    AuthorityLossCause,
+    ControllerLease,
+    RunStatus,
+    WorkItem,
+    WorkKind,
+)
 from autobuild.spec import Specification
-from autobuild.state import StaleLeaseError, StateStore
+from autobuild.state import ControllerLeaseError, StaleLeaseError, StateStore
 
 
 def specification(
@@ -34,28 +40,48 @@ def specification(
     return Specification(objective="Complete the work.", digest=digest, work_items=work_items)
 
 
-def test_claim_is_atomic_and_orders_ready_items(tmp_path: Path) -> None:
+def owned_store(tmp_path: Path) -> tuple[StateStore, ControllerLease]:
     store = StateStore(tmp_path / "state.db")
     store.initialize()
-    desired = specification(("low", 1), ("high", 10))
-    store.sync_spec(desired)
+    controller = store.acquire_controller_lease(
+        tmp_path,
+        60,
+        owner_id="test-controller",
+    )
+    return store, controller
 
-    claim = store.claim_next(desired, "base", 60, 3)
-    second = store.claim_next(desired, "base", 60, 3)
+
+def test_claim_is_atomic_and_orders_ready_items(tmp_path: Path) -> None:
+    store, controller = owned_store(tmp_path)
+    desired = specification(("low", 1), ("high", 10))
+    store.sync_spec(desired, controller_lease=controller)
+
+    claim = store.claim_next(
+        desired, "base", 60, 3, controller_lease=controller
+    )
+    second = store.claim_next(
+        desired, "base", 60, 3, controller_lease=controller
+    )
 
     assert claim is not None
     assert claim.work_item.id == "high"
     assert second is not None
     assert second.work_item.id == "low"
-    assert store.claim_next(desired, "base", 60, 3) is None
+    assert (
+        store.claim_next(
+            desired, "base", 60, 3, controller_lease=controller
+        )
+        is None
+    )
 
 
 def test_stale_generation_cannot_transition(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "state.db")
-    store.initialize()
+    store, controller = owned_store(tmp_path)
     desired = specification(("task", 1))
-    store.sync_spec(desired)
-    claim = store.claim_next(desired, "base", 60, 3)
+    store.sync_spec(desired, controller_lease=controller)
+    claim = store.claim_next(
+        desired, "base", 60, 3, controller_lease=controller
+    )
     assert claim is not None
     stale_claim = replace(claim, generation=claim.generation + 1)
 
@@ -64,9 +90,14 @@ def test_stale_generation_cannot_transition(tmp_path: Path) -> None:
             stale_claim,
             RunStatus.LEASED,
             RunStatus.EXECUTING,
+            controller_lease=controller,
         )
     with pytest.raises(StaleLeaseError) as error:
-        store.renew_lease(stale_claim, 60)
+        store.renew_lease(
+            stale_claim,
+            60,
+            controller_lease=controller,
+        )
 
     assert error.value.cause is AuthorityLossCause.LEASE_GENERATION_CHANGED
     assert store.status()["recent_runs"][0]["status"] == RunStatus.LEASED.value
@@ -77,15 +108,18 @@ def test_restart_expires_lease_and_uses_higher_generation(
 ) -> None:
     clock = datetime(2026, 7, 28, tzinfo=UTC)
     monkeypatch.setattr(state_module, "_now", lambda: clock)
-    store = StateStore(tmp_path / "state.db")
-    store.initialize()
+    store, controller = owned_store(tmp_path)
     desired = specification(("task", 1))
-    store.sync_spec(desired)
-    first = store.claim_next(desired, "base", 1, 3)
+    store.sync_spec(desired, controller_lease=controller)
+    first = store.claim_next(
+        desired, "base", 1, 3, controller_lease=controller
+    )
     assert first is not None
 
     clock += timedelta(seconds=2)
-    second = store.claim_next(desired, "base", 60, 3)
+    second = store.claim_next(
+        desired, "base", 60, 3, controller_lease=controller
+    )
 
     assert second is not None
     assert second.generation == first.generation + 1
@@ -102,7 +136,12 @@ def test_restart_expires_lease_and_uses_higher_generation(
     assert event is not None
     assert json.loads(event[0]) == {"cause": "lease-expired"}
     with pytest.raises(StaleLeaseError):
-        store.record_event(first, "late", {})
+        store.record_event(
+            first,
+            "late",
+            {},
+            controller_lease=controller,
+        )
 
 
 def test_active_run_renews_lease(
@@ -110,19 +149,30 @@ def test_active_run_renews_lease(
 ) -> None:
     clock = datetime(2026, 7, 28, tzinfo=UTC)
     monkeypatch.setattr(state_module, "_now", lambda: clock)
-    store = StateStore(tmp_path / "state.db")
-    store.initialize()
+    store, controller = owned_store(tmp_path)
     desired = specification(("task", 1))
-    store.sync_spec(desired)
-    claim = store.claim_next(desired, "base", 2, 3)
+    store.sync_spec(desired, controller_lease=controller)
+    claim = store.claim_next(
+        desired, "base", 2, 3, controller_lease=controller
+    )
     assert claim is not None
-    store.transition(claim, RunStatus.LEASED, RunStatus.EXECUTING)
+    store.transition(
+        claim,
+        RunStatus.LEASED,
+        RunStatus.EXECUTING,
+        controller_lease=controller,
+    )
 
     clock += timedelta(seconds=1)
-    store.renew_lease(claim, 5)
+    store.renew_lease(claim, 5, controller_lease=controller)
     clock += timedelta(seconds=2)
 
-    assert store.claim_next(desired, "base", 2, 3) is None
+    assert (
+        store.claim_next(
+            desired, "base", 2, 3, controller_lease=controller
+        )
+        is None
+    )
     assert store.status()["recent_runs"][0]["status"] == "executing"
 
 
@@ -131,63 +181,101 @@ def test_expired_run_cannot_renew_lease(
 ) -> None:
     clock = datetime(2026, 7, 28, tzinfo=UTC)
     monkeypatch.setattr(state_module, "_now", lambda: clock)
-    store = StateStore(tmp_path / "state.db")
-    store.initialize()
+    store, controller = owned_store(tmp_path)
     desired = specification(("task", 1))
-    store.sync_spec(desired)
-    claim = store.claim_next(desired, "base", 1, 3)
+    store.sync_spec(desired, controller_lease=controller)
+    claim = store.claim_next(
+        desired, "base", 1, 3, controller_lease=controller
+    )
     assert claim is not None
     clock += timedelta(seconds=2)
 
     with pytest.raises(StaleLeaseError) as error:
-        store.renew_lease(claim, 5)
+        store.renew_lease(claim, 5, controller_lease=controller)
 
     assert error.value.cause is AuthorityLossCause.LEASE_EXPIRED
 
 
 def test_attempt_limit_marks_item_blocked(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "state.db")
-    store.initialize()
+    store, controller = owned_store(tmp_path)
     desired = specification(("task", 1))
-    store.sync_spec(desired)
-    claim = store.claim_next(desired, "base", 60, 1)
+    store.sync_spec(desired, controller_lease=controller)
+    claim = store.claim_next(
+        desired, "base", 60, 1, controller_lease=controller
+    )
     assert claim is not None
-    store.transition(claim, RunStatus.LEASED, RunStatus.FAILED)
+    store.transition(
+        claim,
+        RunStatus.LEASED,
+        RunStatus.FAILED,
+        controller_lease=controller,
+    )
 
-    assert store.claim_next(desired, "base", 60, 1) is None
+    assert (
+        store.claim_next(
+            desired, "base", 60, 1, controller_lease=controller
+        )
+        is None
+    )
     assert store.status()["work_items"][0]["status"] == "blocked"
 
 
 def test_sync_marks_removed_item_superseded_and_restores_it(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "state.db")
-    store.initialize()
+    store, controller = owned_store(tmp_path)
     initial = specification(("keep", 1), ("remove", 2))
-    store.sync_spec(initial)
-    store.sync_spec(specification(("keep", 1), digest="spec-b"))
+    store.sync_spec(initial, controller_lease=controller)
+    store.sync_spec(
+        specification(("keep", 1), digest="spec-b"),
+        controller_lease=controller,
+    )
     by_id = {item["id"]: item for item in store.status()["work_items"]}
     assert by_id["remove"]["status"] == "superseded"
 
-    store.sync_spec(specification(("keep", 1), ("remove", 2), digest="spec-c"))
+    store.sync_spec(
+        specification(("keep", 1), ("remove", 2), digest="spec-c"),
+        controller_lease=controller,
+    )
     by_id = {item["id"]: item for item in store.status()["work_items"]}
     assert by_id["remove"]["status"] == "ready"
 
 
 def test_success_marks_item_achieved(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "state.db")
-    store.initialize()
+    store, controller = owned_store(tmp_path)
     desired = specification(("task", 1))
-    store.sync_spec(desired)
-    claim = store.claim_next(desired, "base", 60, 3)
+    store.sync_spec(desired, controller_lease=controller)
+    claim = store.claim_next(
+        desired, "base", 60, 3, controller_lease=controller
+    )
     assert claim is not None
-    store.transition(claim, RunStatus.LEASED, RunStatus.EXECUTING)
-    store.transition(claim, RunStatus.EXECUTING, RunStatus.EVALUATING)
-    store.transition(claim, RunStatus.EVALUATING, RunStatus.PROMOTING)
-    store.transition(claim, RunStatus.PROMOTING, RunStatus.SUCCEEDED)
+    store.transition(
+        claim,
+        RunStatus.LEASED,
+        RunStatus.EXECUTING,
+        controller_lease=controller,
+    )
+    store.transition(
+        claim,
+        RunStatus.EXECUTING,
+        RunStatus.EVALUATING,
+        controller_lease=controller,
+    )
+    store.transition(
+        claim,
+        RunStatus.EVALUATING,
+        RunStatus.PROMOTING,
+        controller_lease=controller,
+    )
+    store.transition(
+        claim,
+        RunStatus.PROMOTING,
+        RunStatus.SUCCEEDED,
+        controller_lease=controller,
+    )
 
     assert store.status()["work_items"][0]["status"] == "achieved"
 
     expanded = specification(("task", 1), ("unrelated", 2), digest="spec-b")
-    store.sync_spec(expanded)
+    store.sync_spec(expanded, controller_lease=controller)
     by_id = {item["id"]: item for item in store.status()["work_items"]}
     assert by_id["task"]["status"] == "achieved"
     assert by_id["unrelated"]["status"] == "ready"
@@ -198,7 +286,7 @@ def test_success_marks_item_achieved(tmp_path: Path) -> None:
         digest="spec-c",
         item_digests={"task": "item-task-v2"},
     )
-    store.sync_spec(changed)
+    store.sync_spec(changed, controller_lease=controller)
     by_id = {item["id"]: item for item in store.status()["work_items"]}
     assert by_id["task"]["status"] == "ready"
 
@@ -206,14 +294,13 @@ def test_success_marks_item_achieved(tmp_path: Path) -> None:
 def test_sync_migrates_legacy_full_spec_digest_without_reopening(
     tmp_path: Path,
 ) -> None:
-    store = StateStore(tmp_path / "state.db")
-    store.initialize()
+    store, controller = owned_store(tmp_path)
     legacy = specification(
         ("task", 1),
         digest="legacy-full-spec",
         item_digests={"task": "legacy-full-spec"},
     )
-    store.sync_spec(legacy)
+    store.sync_spec(legacy, controller_lease=controller)
     with sqlite3.connect(store.path) as connection:
         connection.execute("UPDATE work_items SET status = 'achieved' WHERE id = 'task'")
 
@@ -222,7 +309,7 @@ def test_sync_migrates_legacy_full_spec_digest_without_reopening(
         digest="legacy-full-spec",
         item_digests={"task": "item-task"},
     )
-    store.sync_spec(migrated)
+    store.sync_spec(migrated, controller_lease=controller)
 
     assert store.status()["work_items"][0]["status"] == "achieved"
     with sqlite3.connect(store.path) as connection:
@@ -230,3 +317,101 @@ def test_sync_migrates_legacy_full_spec_digest_without_reopening(
             "SELECT spec_digest FROM work_items WHERE id = 'task'"
         ).fetchone()[0]
     assert stored_digest == "item-task"
+
+
+def test_controller_lease_is_exclusive_and_recovers_after_expiry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = datetime(2026, 7, 28, tzinfo=UTC)
+    monkeypatch.setattr(state_module, "_now", lambda: clock)
+    first_store = StateStore(tmp_path / "state.db")
+    second_store = StateStore(tmp_path / "state.db")
+    first_store.initialize()
+    first = first_store.acquire_controller_lease(
+        tmp_path,
+        2,
+        owner_id="first-controller",
+    )
+
+    with pytest.raises(ControllerLeaseError):
+        second_store.acquire_controller_lease(
+            tmp_path,
+            2,
+            owner_id="second-controller",
+        )
+
+    assert second_store.status()["controller_lease"]["active"] is True
+    clock += timedelta(seconds=3)
+    second = second_store.acquire_controller_lease(
+        tmp_path,
+        2,
+        owner_id="second-controller",
+    )
+
+    assert second.generation == first.generation + 1
+    with pytest.raises(ControllerLeaseError):
+        first_store.renew_controller_lease(first, 2)
+
+
+def test_status_does_not_create_or_require_controller_ownership(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path / "state.db")
+
+    assert store.status() == {
+        "controller_lease": None,
+        "work_items": [],
+        "recent_runs": [],
+    }
+    assert not store.path.exists()
+
+
+def test_controller_lease_renews_and_fences_state_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = datetime(2026, 7, 28, tzinfo=UTC)
+    monkeypatch.setattr(state_module, "_now", lambda: clock)
+    store = StateStore(tmp_path / "state.db")
+    store.initialize()
+    first = store.acquire_controller_lease(
+        tmp_path,
+        2,
+        owner_id="first-controller",
+    )
+    clock += timedelta(seconds=1)
+    store.renew_controller_lease(first, 3)
+    desired = specification(("task", 1))
+    store.sync_spec(desired, controller_lease=first)
+
+    clock += timedelta(seconds=2)
+    claim = store.claim_next(
+        desired,
+        "base",
+        2,
+        3,
+        controller_lease=first,
+    )
+
+    assert claim is not None
+    clock += timedelta(seconds=2)
+    second = store.acquire_controller_lease(
+        tmp_path,
+        2,
+        owner_id="second-controller",
+    )
+    with pytest.raises(ControllerLeaseError):
+        store.transition(
+            claim,
+            RunStatus.LEASED,
+            RunStatus.PROMOTING,
+            controller_lease=first,
+        )
+    with (
+        pytest.raises(ControllerLeaseError),
+        store.controller_operation(first, 2),
+    ):
+        pass
+    with store.controller_operation(second, 2):
+        pass

@@ -69,6 +69,14 @@ class Claim:
 
 
 @dataclass(frozen=True)
+class ControllerLease:
+    owner_id: str
+    generation: int
+    repository: str
+    lease_expires_at: str
+
+
+@dataclass(frozen=True)
 class Gate:
     name: str
     command: tuple[str, ...]

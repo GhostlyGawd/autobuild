@@ -16,12 +16,18 @@ The controller applies these boundaries:
 - It redacts inherited secret values and common credential forms before it
   writes agent or gate output to durable events.
 - It isolates agent edits in a Git worktree.
+- It acquires one renewable controller owner token and generation for the state
+  database and resolved base repository before scheduling mutations.
+- It rejects controller state mutations when the owner token, repository,
+  generation, or lease time is not current.
 - It commits the candidate before verification and rejects later gate changes.
 - It revalidates the SPEC digest and base commit before dispatch and promotion.
 - It rejects events that have an expired or stale lease generation.
 - It revalidates the full SPEC digest, base commit, lease generation, and lease
   time during long agent and gate processes.
 - It renews the lease only while all heartbeat authority checks pass.
+- It holds an immediate SQLite ownership transaction during local promotion so
+  another controller cannot take ownership during the Git mutation.
 - It stops the child process, makes the run stale, and records one bounded
   authority-loss cause if a heartbeat check fails.
 - It uses fast-forward-only promotion.
@@ -30,6 +36,7 @@ The controller applies these boundaries:
   when the current lease still has authority.
 - It removes only a successful, clean, registered worktree below the configured
   worktree root after the promoted commit is reachable.
+- It lets validation and status inspection run without controller ownership.
 
 These controls do not create a complete security sandbox. The configured agent,
 operating system, Git hooks, test commands, package managers, and build tools can

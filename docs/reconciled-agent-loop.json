@@ -16,6 +16,8 @@
       "priority",
       "status",
       "attempt count",
+      "controller lease generation",
+      "controller lease expiration",
       "lease generation",
       "lease expiration"
     ]
@@ -39,6 +41,12 @@
   ],
   "ownership_failure_boundaries": [
     {
+      "resource": "Controller ownership",
+      "owner": "One current owner token and generation in the SQLite state database for the resolved base repository",
+      "failure_domain": "Concurrent or restarted controllers can share a state database and base repository",
+      "authority_loss_behavior": "Reject scheduling mutations and promotion unless the controller owner, repository, generation, and lease time are current"
+    },
+    {
       "resource": "Desired work",
       "owner": "SPEC.json at its observed full SHA-256 digest, with each item identified by its canonical SHA-256 digest",
       "failure_domain": "A worker can read but cannot redefine the requested outcome",
@@ -58,15 +66,17 @@
     }
   ],
   "reconciliation": {
-    "observation": "Load the current SPEC, Git commit, work items, runs, leases, and event history",
-    "comparison": "Find an eligible desired item that has no current owner and remains below its attempt limit",
-    "action": "Create a generation-fenced run, isolate a worktree, execute the agent, evaluate gates, revalidate, and promote",
+    "observation": "Load the current SPEC, Git commit, controller lease, work items, runs, leases, and event history",
+    "comparison": "Acquire current controller ownership, then find an eligible desired item that has no current run and remains below its attempt limit",
+    "action": "Renew controller ownership, create a generation-fenced run, isolate a worktree, execute the agent, evaluate gates, revalidate, and promote inside the controller-owned operation boundary",
     "repeat_condition": "Repeat while eligible work exists; re-observe after each state change, restart, timeout, or external change"
   },
   "dispatch_revalidation": {
     "boundary": "Immediately before worktree creation and agent dispatch",
-    "fresh_read": "Read the SPEC digest and base Git commit again and compare both with the claim",
+    "fresh_read": "Read controller ownership, the SPEC digest, and the base Git commit again and compare them with the current controller and claim",
     "deny_conditions": [
+      "Another current controller owns the state database and base repository",
+      "The controller owner, repository, generation, or lease time is not current",
       "The SPEC digest changed",
       "The base commit changed",
       "The lease expired",
@@ -75,18 +85,19 @@
     ]
   },
   "retries_timeouts": {
-    "retry_policy": "Each child heartbeat revalidates the full SPEC digest, base commit, lease generation, and lease time; the controller renews only current authority, and a failed or stale item returns to ready until its configured attempt limit is reached",
+    "retry_policy": "Each child heartbeat revalidates the full SPEC digest and base commit before it renews controller ownership and revalidates the run generation and run lease time; a failed or stale item returns to ready until its configured attempt limit is reached",
     "backoff": "The current local controller retries on a later explicit reconciliation cycle; time-based exponential backoff is not implemented",
     "attempt_limit": 5,
     "timeouts": [
       "The agent process has a configured wall-clock timeout",
       "Each verification gate has a configured wall-clock timeout",
+      "The controller ownership lease has a configured wall-clock expiration",
       "The run lease has a configured wall-clock expiration"
     ]
   },
   "restart_stale_events": {
-    "restart_behavior": "Initialize the schema, expire old nonterminal leases, preserve their artifacts, and create a new generation only on a later claim; a child process stops if any heartbeat authority check fails",
-    "fencing_token": "The pair of run id and monotonically increasing per-item generation, checked with lease expiration and expected state",
+    "restart_behavior": "A replacement controller waits for the current ownership lease to expire, acquires a higher controller generation, expires old nonterminal run leases, preserves their artifacts, and creates a new run generation only on a later claim",
+    "fencing_token": "The controller owner and monotonically increasing controller generation fence scheduling and promotion; the run id and monotonically increasing per-item generation fence run events",
     "stale_event_disposition": "Reject the state change and retain the prior durable event history"
   },
   "preservation_cleanup": [
@@ -175,10 +186,10 @@
     {
       "name": "leased",
       "classification": "execution",
-      "owner": "Claim transaction in SQLite",
-      "entry": "An eligible ready item is selected under an immediate transaction",
+      "owner": "Current controller generation and claim transaction in SQLite",
+      "entry": "The current controller selects an eligible ready item under an immediate transaction",
       "exit": "Fresh reads allow execution, or changed state makes the claim stale",
-      "revalidation": "Compare SPEC digest, base commit, generation, and lease before dispatch",
+      "revalidation": "Compare controller ownership, SPEC digest, base commit, run generation, and run lease before dispatch",
       "retry_timeout": "Lease expiration makes the run stale",
       "restart": "Recover or expire the durable lease",
       "disposal": "Preserve the claim event",
@@ -190,8 +201,8 @@
       "owner": "Reconciler with a bounded agent child process",
       "entry": "Worktree creation succeeds and the current lease transitions from leased",
       "exit": "Agent failure goes to failed; agent success goes to evaluating",
-      "revalidation": "Each heartbeat and the child-completion boundary compare the full SPEC digest, base commit, generation, and lease time",
-      "retry_timeout": "A current heartbeat renews the lease; agent timeout or authority loss stops the child and fails or stales the run",
+      "revalidation": "Each heartbeat and the child-completion boundary renew controller ownership, then compare the full SPEC digest, base commit, run generation, and run lease time",
+      "retry_timeout": "A current heartbeat renews controller and run leases; agent timeout or authority loss stops the child and fails or stales the run",
       "restart": "An expired lease makes the run stale; preserve the worktree",
       "disposal": "Preserve the worktree and bounded result summary",
       "proof": "test_long_agent_renews_short_lease, test_active_agent_stops_after_spec_authority_loss, test_active_agent_stops_after_base_commit_authority_loss, and test_process_stops_if_heartbeat_loses_authority"
@@ -202,8 +213,8 @@
       "owner": "Reconciler and configured gate runner",
       "entry": "The agent exits successfully under the current lease",
       "exit": "Any failed gate fails the run; all passed gates continue to fresh revalidation",
-      "revalidation": "Each heartbeat and gate-completion boundary compare the full SPEC digest, base commit, generation, and lease time before recording a gate result",
-      "retry_timeout": "A current heartbeat renews the lease; gate timeout or authority loss stops the child and fails or stales the run",
+      "revalidation": "Each heartbeat and gate-completion boundary renew controller ownership, then compare the full SPEC digest, base commit, run generation, and run lease time before recording a gate result",
+      "retry_timeout": "A current heartbeat renews controller and run leases; gate timeout or authority loss stops the child and fails or stales the run",
       "restart": "An expired lease makes the run stale; preserve results",
       "disposal": "Preserve gate output in bounded event evidence",
       "proof": "test_gate_failure_prevents_promotion, test_active_agent_stops_after_spec_authority_loss, and test_active_agent_stops_after_base_commit_authority_loss"
@@ -211,14 +222,14 @@
     {
       "name": "promoting",
       "classification": "execution",
-      "owner": "Reconciler",
+      "owner": "Reconciler with the current controller owner token and generation",
       "entry": "All gates pass and fresh SPEC and base-commit reads match the claim",
       "exit": "Fast-forward success reaches succeeded; Git invariant failure reaches failed",
-      "revalidation": "Read the base commit immediately before fast-forward merge",
+      "revalidation": "Validate controller ownership and read the base commit immediately before fast-forward merge; hold the SQLite ownership transaction during promotion",
       "retry_timeout": "Do not retry a promotion after base movement without a new generation",
       "restart": "Re-observe Git reachability and durable state before any action",
       "disposal": "Preserve candidate and promotion evidence",
-      "proof": "test_base_change_prevents_promotion"
+      "proof": "test_base_change_prevents_promotion, test_controller_lease_renews_and_fences_state_mutation, and test_concurrent_controller_cannot_dispatch_while_owner_is_current"
     },
     {
       "name": "succeeded",
@@ -374,6 +385,20 @@
       "failure_injection": "Replace the stored legacy full-file digest with the canonical item digest",
       "expected_semantic_outcome": "The current achieved item stays achieved and later changes use its individual identity",
       "durable_evidence": "SQLite stored digest, achieved state, and migration assertion"
+    },
+    {
+      "sequence": "start one controller, dispatch a long agent, then start a second controller against the same state database and base repository",
+      "transition": "controller ownership remains with the first generation",
+      "failure_injection": "Attempt concurrent controller acquisition while the first ownership lease is current",
+      "expected_semantic_outcome": "The second controller is deferred and cannot create a run or reach promotion",
+      "durable_evidence": "Controller acquisition events, one run row, deferred outcome, and concurrency assertions"
+    },
+    {
+      "sequence": "acquire controller ownership, simulate controller loss, wait past lease expiry, then start a replacement controller",
+      "transition": "expired controller generation to a higher current generation",
+      "failure_injection": "Controller process loss without graceful lease release",
+      "expected_semantic_outcome": "The replacement controller acquires ownership and completes reconciliation",
+      "durable_evidence": "Increasing controller acquisition generations, expired lease status, and recovered successful run"
     }
   ]
 }
