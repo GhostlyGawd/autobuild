@@ -48,6 +48,14 @@ def load_spec(path: Path) -> Specification:
     for index, raw_item in enumerate(raw_items):
         if not isinstance(raw_item, dict):
             raise SpecError(f"work_items[{index}] must be an object")
+        item_digest = hashlib.sha256(
+            json.dumps(
+                raw_item,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
         item_id = _nonempty_text(raw_item.get("id"), f"work_items[{index}].id")
         if item_id in seen:
             raise SpecError(f"duplicate work item id: {item_id}")
@@ -74,8 +82,7 @@ def load_spec(path: Path) -> Specification:
                     _nonempty_text(value, f"work_items[{index}].acceptance")
                     for value in acceptance
                 ),
-                spec_digest=digest,
+                spec_digest=item_digest,
             )
         )
     return Specification(objective=objective, digest=digest, work_items=tuple(items))
-

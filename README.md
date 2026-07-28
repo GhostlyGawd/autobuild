@@ -11,6 +11,8 @@ but the project is not production-ready.
 ## What it does
 
 - Keeps desired outcomes in `SPEC.json`.
+- Uses a canonical digest for each work item to retain unrelated achievements.
+- Uses the full `SPEC.json` digest to fence each active run.
 - Keeps execution state and evidence in SQLite.
 - Reconciles desired state instead of trusting a worker process.
 - Uses lease generations to reject stale worker events.
@@ -69,6 +71,12 @@ they must leave the candidate unchanged.
 - [`docs/architecture.md`](docs/architecture.md) explains the system flow and
   current limitations.
 - [`SECURITY.md`](SECURITY.md) defines the trust and containment boundaries.
+
+Each work item has a SHA-256 digest of its canonical JSON object. The state
+store uses this digest to decide if an achieved item changed. A change to a
+different item does not reopen the achieved item. The controller also hashes
+the exact `SPEC.json` bytes. It uses that full digest with the base commit to
+stop an active run if any desired state changes.
 
 ## Important limitations
 

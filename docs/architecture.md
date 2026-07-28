@@ -35,7 +35,8 @@ visual source.
 
 | State | Authoritative owner | Worker authority |
 |---|---|---|
-| Desired outcomes | `SPEC.json` at the observed digest | Read only |
+| Desired outcomes | `SPEC.json` at the observed full digest | Read only |
+| Achieved item revision | Canonical work-item digest in SQLite | None |
 | Source revision | Git base repository | Changes only its worktree |
 | Lease and event history | SQLite state database | Submits fenced events |
 | Candidate content | Worktree branch | Can edit before evaluation |
@@ -43,6 +44,17 @@ visual source.
 
 The controller uses an observation, comparison, action, and re-observation loop.
 A process exit is execution evidence. It is not semantic success.
+
+The controller uses two specification digests. It hashes the exact
+`SPEC.json` bytes to fence an active run. It also hashes the canonical JSON for
+each work item. SQLite binds achieved state to the item digest. An unrelated
+item or top-level edit does not reopen achieved work. A change to the achieved
+item does reopen it.
+
+The first sync after this identity model was introduced recognizes a legacy
+achieved row only when its stored digest equals the current full specification
+digest. It then stores the canonical item digest without reopening the item. A
+simultaneous specification change causes conservative reopening.
 
 The controller renews the current lease while an agent or gate process runs.
 It stops the child process if renewal shows that the run lost authority. It

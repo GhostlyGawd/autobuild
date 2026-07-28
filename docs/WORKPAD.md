@@ -32,6 +32,7 @@
 - [x] Retry the live product reconciliation after the failed run lease expires.
 - [x] Run the first bounded self-improvement experiment.
 - [x] Add baseline and candidate gate vectors for self-improvement work.
+- [x] Bind achieved state to canonical work-item revisions.
 - [ ] Add richer quality metrics and multi-candidate experiment ranking.
 
 ## Acceptance criteria
@@ -52,6 +53,7 @@
 | Contract item | Normative level | Implementation | Test | Docs/example | Status |
 |---|---|---|---|---|---|
 | SPEC owns desired state | Required | `spec.py`, `orchestrator.py` | SPEC and orchestrator tests | README, architecture | Proven for current local flow |
+| Item revision owns achieved state | Required | `spec.py`, `state.py` | Item identity and migration tests | README, architecture, lifecycle contract | Proven |
 | SQLite owns leases and events | Required | `state.py` | State lifecycle tests | architecture | Proven for current local flow |
 | Generation fences stale events | Required | `state.py` | Stale and restart tests | lifecycle contract | Proven |
 | Fresh read before dispatch and promotion | Required | `orchestrator.py`, `gitops.py` | SPEC-change, base-change, and Git integration tests | architecture | Proven for tested local boundaries |
@@ -90,6 +92,21 @@ Alignment review for `recursive-improvement-cycle`:
 - Reviewed and unaffected: setup, version, provenance, release, and visual
   surfaces do not change. The existing execution-loop diagram remains accurate
   because this change refines evaluation evidence without changing control flow.
+
+Alignment review for canonical work-item identity:
+
+- Required drift repaired: achieved state used the full `SPEC.json` digest.
+  Adding unrelated work could reopen every achieved item.
+- Implementation and contract now use a canonical digest for each work item.
+  The full file digest remains the dispatch and promotion fence.
+- Migration behavior preserves an achieved legacy row only when its stored
+  digest matches the currently observed full file.
+- Reviewed and unaffected: `SPEC.json` content and acceptance criteria do not
+  change in this checkpoint.
+- Reviewed and unaffected: `SECURITY.md`, setup, adapter, promotion, cleanup,
+  release, and writing-standard boundaries do not change.
+- Visual meaning remains accurate. The architecture description now names both
+  specification identities without changing the control-flow diagram.
 
 ## Implementation progress
 
@@ -135,6 +152,9 @@ Evidence recorded on 2026-07-28:
 | Run Python gate | Parent environment has no source path | Import candidate package deterministically | Environment assertion and full gate replay | `test_gate_environment_uses_candidate_source_and_isolated_pytest` |
 | Evaluate self-improvement | Baseline fails and candidate passes | Record measurable improvement | Baseline and evaluation events | `test_self_improvement_records_baseline_and_improvement` |
 | Evaluate unchanged failure | Baseline and candidate gate fail | Record zero delta and no improvement | Baseline and evaluation events | `test_self_improvement_does_not_call_an_unchanged_failure_a_regression` |
+| Add unrelated desired work | Full SPEC digest changes; item digest stays stable | Keep achieved item achieved | SQLite item state | `test_success_marks_item_achieved` |
+| Change an achieved item | Canonical item digest changes | Return the item to ready | SQLite item state | `test_success_marks_item_achieved` |
+| Migrate legacy identity | Stored item digest equals current full SPEC digest | Retain achieved state and store the item digest | SQLite digest and state | `test_sync_migrates_legacy_full_spec_digest_without_reopening` |
 
 Commands and outcomes:
 
@@ -181,6 +201,21 @@ Candidate evidence recorded on 2026-07-28 for
 - The controller promoted commit `3a13e08`, marked the self-improvement item
   achieved, and cleaned only the successful candidate worktree.
 
+Canonical item-identity evidence recorded on 2026-07-28:
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=src python -m pytest -q`:
+  38 tests passed.
+- `python -m ruff check .`: passed.
+- Repository validation passed configuration, SPEC, executable, and Draft
+  2020-12 lifecycle-contract checks.
+- The automated writing precheck found no automated findings. Its final status
+  remained `NOT RELEASED — COMPLIANCE CHECK INCOMPLETE`.
+- Codeweb reported no new cycle, confirmed duplication, or lost caller.
+- Before live migration, both achieved items stored the current full
+  `SPEC.json` digest.
+- Live status synchronization replaced those legacy values with two different
+  canonical item digests. Both items remained achieved.
+
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
 autoloading. A fresh project virtual environment remains the supported setup.
@@ -205,11 +240,10 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: the first bounded `recursive-improvement-cycle` completed. The
-controller promoted commit `3a13e08566e916ec7d8af3c8f4577f43812b2751`,
-recorded a non-regression, marked the item achieved, and cleaned its successful
-worktree.
+Status: canonical work-item identity is implemented. An unrelated
+`SPEC.json` change no longer reopens an achieved item. The full specification
+digest still fences active runs.
 
-Next owner and action: the autonomous orchestrator must push the promoted
-candidate, then bind achieved work items to individual SPEC revisions instead
-of the whole-file digest.
+Next owner and action: the autonomous orchestrator must validate and migrate
+the live state, push this checkpoint, then add the next bounded work items to
+`SPEC.json`.

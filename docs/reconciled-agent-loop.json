@@ -7,7 +7,8 @@
   "normalized_work": {
     "identity_fields": [
       "work item id",
-      "SPEC digest",
+      "canonical work item digest for achieved-state identity",
+      "full SPEC digest for active-run fencing",
       "base commit"
     ],
     "scheduling_fields": [
@@ -22,7 +23,7 @@
   "domain_states": [
     {"name": "ready", "meaning": "The desired item is eligible for a bounded attempt"},
     {"name": "active", "meaning": "One current fenced run owns the item"},
-    {"name": "achieved", "meaning": "A verified candidate was promoted for the observed SPEC revision"},
+    {"name": "achieved", "meaning": "A verified candidate was promoted for the observed canonical work-item revision"},
     {"name": "blocked", "meaning": "Policy or repeated failure prevents automatic progress"},
     {"name": "superseded", "meaning": "The current SPEC no longer requests the item"}
   ],
@@ -39,7 +40,7 @@
   "ownership_failure_boundaries": [
     {
       "resource": "Desired work",
-      "owner": "SPEC.json at its observed SHA-256 digest",
+      "owner": "SPEC.json at its observed full SHA-256 digest, with each item identified by its canonical SHA-256 digest",
       "failure_domain": "A worker can read but cannot redefine the requested outcome",
       "authority_loss_behavior": "Stop dispatch or promotion and mark the run stale"
     },
@@ -117,7 +118,7 @@
       "owner": "SQLite projection of the current SPEC",
       "entry": "A current SPEC item is new, changed after achievement, or returned from a failed or stale attempt",
       "exit": "A current generation claims the item, the SPEC removes it, or the attempt limit blocks it",
-      "revalidation": "Re-read the item, attempt count, SPEC digest, and absence of a current lease during the claim transaction",
+      "revalidation": "Re-read the item, canonical item digest, attempt count, full SPEC digest, and absence of a current lease during the claim transaction",
       "retry_timeout": "Remain ready until a later cycle; do not exceed the attempt limit",
       "restart": "Remain eligible after controller restart",
       "disposal": "Preserve the item and its prior evidence",
@@ -140,12 +141,12 @@
       "classification": "domain",
       "owner": "SQLite projection after Git promotion",
       "entry": "A promoting run records a successful fast-forward commit",
-      "exit": "The SPEC revision changes the item",
-      "revalidation": "Confirm promoted commit and current item SPEC digest",
-      "retry_timeout": "No retry while the item remains achieved for the same SPEC revision",
+      "exit": "The canonical work-item digest changes",
+      "revalidation": "Confirm the promoted commit and current canonical work-item digest",
+      "retry_timeout": "No retry while the item remains achieved for the same canonical work-item revision",
       "restart": "Retain achieved state",
       "disposal": "Preserve compact evidence; terminal worktree becomes cleanup-eligible",
-      "proof": "test_success_marks_item_achieved"
+      "proof": "test_success_marks_item_achieved and test_sync_migrates_legacy_full_spec_digest_without_reopening"
     },
     {
       "name": "blocked",
@@ -345,6 +346,20 @@
       "failure_injection": "Keep the observed gate failing in both evaluations",
       "expected_semantic_outcome": "Record no improvement with a zero pass delta instead of a false regression",
       "durable_evidence": "Baseline, candidate, measured evaluation, failed run, and preserved worktree"
+    },
+    {
+      "sequence": "achieve one item, add an unrelated item, then change the achieved item",
+      "transition": "achieved remains achieved, then achieved returns to ready",
+      "failure_injection": "Change the full SPEC digest without changing the first item, then change its canonical item digest",
+      "expected_semantic_outcome": "Unrelated desired work does not reopen the item, but an item revision does",
+      "durable_evidence": "SQLite item states and focused state-store assertions"
+    },
+    {
+      "sequence": "load a legacy achieved row whose item digest is the current full SPEC digest, then sync canonical item identity",
+      "transition": "achieved remains achieved during identity migration",
+      "failure_injection": "Replace the stored legacy full-file digest with the canonical item digest",
+      "expected_semantic_outcome": "The current achieved item stays achieved and later changes use its individual identity",
+      "durable_evidence": "SQLite stored digest, achieved state, and migration assertion"
     }
   ]
 }

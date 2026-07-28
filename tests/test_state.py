@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,7 +13,12 @@ from autobuild.spec import Specification
 from autobuild.state import StaleLeaseError, StateStore
 
 
-def specification(*items: tuple[str, int], digest: str = "spec-a") -> Specification:
+def specification(
+    *items: tuple[str, int],
+    digest: str = "spec-a",
+    item_digests: dict[str, str] | None = None,
+) -> Specification:
+    item_digests = item_digests or {}
     work_items = tuple(
         WorkItem(
             id=item_id,
@@ -20,7 +26,7 @@ def specification(*items: tuple[str, int], digest: str = "spec-a") -> Specificat
             priority=priority,
             objective=f"Complete {item_id}.",
             acceptance=("The item is complete.",),
-            spec_digest=digest,
+            spec_digest=item_digests.get(item_id, f"item-{item_id}"),
         )
         for item_id, priority in items
     )
@@ -163,3 +169,48 @@ def test_success_marks_item_achieved(tmp_path: Path) -> None:
     store.transition(claim, RunStatus.PROMOTING, RunStatus.SUCCEEDED)
 
     assert store.status()["work_items"][0]["status"] == "achieved"
+
+    expanded = specification(("task", 1), ("unrelated", 2), digest="spec-b")
+    store.sync_spec(expanded)
+    by_id = {item["id"]: item for item in store.status()["work_items"]}
+    assert by_id["task"]["status"] == "achieved"
+    assert by_id["unrelated"]["status"] == "ready"
+
+    changed = specification(
+        ("task", 1),
+        ("unrelated", 2),
+        digest="spec-c",
+        item_digests={"task": "item-task-v2"},
+    )
+    store.sync_spec(changed)
+    by_id = {item["id"]: item for item in store.status()["work_items"]}
+    assert by_id["task"]["status"] == "ready"
+
+
+def test_sync_migrates_legacy_full_spec_digest_without_reopening(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path / "state.db")
+    store.initialize()
+    legacy = specification(
+        ("task", 1),
+        digest="legacy-full-spec",
+        item_digests={"task": "legacy-full-spec"},
+    )
+    store.sync_spec(legacy)
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("UPDATE work_items SET status = 'achieved' WHERE id = 'task'")
+
+    migrated = specification(
+        ("task", 1),
+        digest="legacy-full-spec",
+        item_digests={"task": "item-task"},
+    )
+    store.sync_spec(migrated)
+
+    assert store.status()["work_items"][0]["status"] == "achieved"
+    with sqlite3.connect(store.path) as connection:
+        stored_digest = connection.execute(
+            "SELECT spec_digest FROM work_items WHERE id = 'task'"
+        ).fetchone()[0]
+    assert stored_digest == "item-task"

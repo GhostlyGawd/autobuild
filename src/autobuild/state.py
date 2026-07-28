@@ -105,6 +105,8 @@ class StateStore:
                         spec_digest = excluded.spec_digest,
                         status = CASE
                             WHEN work_items.status = 'superseded' THEN 'ready'
+                            WHEN work_items.status = 'achieved'
+                                 AND work_items.spec_digest = ? THEN 'achieved'
                             WHEN work_items.spec_digest != excluded.spec_digest
                                  AND work_items.status = 'achieved' THEN 'ready'
                             ELSE work_items.status
@@ -119,6 +121,7 @@ class StateStore:
                         json.dumps(item.acceptance),
                         item.spec_digest,
                         now,
+                        specification.digest,
                     ),
                 )
             if desired_ids:
