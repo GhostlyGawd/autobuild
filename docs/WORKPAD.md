@@ -63,7 +63,7 @@
 | Isolated, fast-forward-only promotion | Required | `gitops.py` | Git integration tests | README, architecture | Proven |
 | Successful-worktree cleanup | Required | `gitops.py`, `orchestrator.py` | Clean removal and dirty preservation tests | README, architecture, SECURITY | Proven |
 | Bounded self-improvement | Required | normal work-item route | Pending | SPEC, architecture | Partial |
-| Binary self-improvement comparison | Required | baseline and candidate gate events | Injected baseline-failure test | SPEC, architecture | Proven |
+| Measured self-improvement comparison | Required | baseline and candidate vectors with pass deltas | Improvement and unchanged-failure tests | README, SPEC, architecture, lifecycle contract | Candidate gates passed; promotion pending |
 | Automated controlled-English precheck | Required | `writing.py`, CLI gate | Writing precheck tests and live command | README, writing standard | Proven for limited automated scope |
 | Full STE claim requires human reviews | Required | repository policy and docs | Deterministic release labels | README, AGENTS, writing standard | Not released; human reviews unavailable |
 
@@ -76,6 +76,20 @@ Alignment review for `bootstrap-reconciler`:
 - Reviewed and unaffected: `SPEC.json` still defines the same acceptance
   criteria. README, architecture, security, setup, and examples remain accurate
   because this worker did not change runtime or security behavior.
+
+Alignment review for `recursive-improvement-cycle`:
+
+- Implementation-defined omission repaired: self-improvement evaluation events
+  now contain the observed gate vectors and numeric pass deltas.
+- Required conflict repaired: an unchanged baseline and candidate gate failure
+  is `no-improvement`, not `regression`.
+- Reviewed and unaffected: `SPEC.json` already requires a measurable
+  non-regression or improvement, so its product outcome does not change.
+- Reviewed and unaffected: `SECURITY.md` remains accurate because the event uses
+  the existing redacted gate results and adds only Boolean and integer values.
+- Reviewed and unaffected: setup, version, provenance, release, and visual
+  surfaces do not change. The existing execution-loop diagram remains accurate
+  because this change refines evaluation evidence without changing control flow.
 
 ## Implementation progress
 
@@ -120,6 +134,7 @@ Evidence recorded on 2026-07-28:
 | Clean successful worktree | Dirty worktree | Preserve uncertain content | Git registry and path assertions | `test_cleanup_preserves_dirty_successful_worktree` |
 | Run Python gate | Parent environment has no source path | Import candidate package deterministically | Environment assertion and full gate replay | `test_gate_environment_uses_candidate_source_and_isolated_pytest` |
 | Evaluate self-improvement | Baseline fails and candidate passes | Record measurable improvement | Baseline and evaluation events | `test_self_improvement_records_baseline_and_improvement` |
+| Evaluate unchanged failure | Baseline and candidate gate fail | Record zero delta and no improvement | Baseline and evaluation events | `test_self_improvement_does_not_call_an_unchanged_failure_a_regression` |
 
 Commands and outcomes:
 
@@ -143,6 +158,24 @@ Commands and outcomes:
 - Live generation 3: all controller gates passed, commit `4263497` was promoted,
   the product item became achieved, and only the successful worktree was
   cleaned.
+
+Candidate evidence recorded on 2026-07-28 for
+`recursive-improvement-cycle`:
+
+- The candidate started from commit
+  `82659c60184b75b5417d8f80b2ad765055fa3a24` on registered worktree branch
+  `autobuild/recursive-improvement-cycle/7cc302a6`.
+- The focused comparison suite passed 2 tests. It measured an improvement
+  delta of `+1` and an unchanged-failure delta of `0`.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=src python -m pytest`:
+  36 tests passed.
+- `python -m ruff check .`: passed.
+- `PYTHONPATH=src python -m autobuild writing-check`: no automated
+  findings; final status remained `NOT RELEASED — COMPLIANCE CHECK INCOMPLETE`.
+- `PYTHONPATH=src python -m autobuild validate --skip-git-clean`: configuration,
+  SPEC, executable, and Draft 2020-12 lifecycle-contract checks passed.
+- The configured candidate gate vector is 4 of 4 passed. The controller must
+  commit the candidate before it runs the clean-state promotion check.
 
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
@@ -168,9 +201,10 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: live generation 3 completed the `bootstrap-reconciler` item. The
-controller promoted commit `42634971f60ba8b88781716e7d4793488fdebb4b`,
-recorded the item as achieved, and cleaned the successful worktree.
+Status: the bounded `recursive-improvement-cycle` candidate records numeric
+gate pass deltas and passes the configured gate vector in its isolated
+worktree. Promotion is pending.
 
-Next owner and action: the autonomous orchestrator must commit the binary
-comparison evidence, then run the first bounded self-improvement experiment.
+Next owner and action: the autonomous orchestrator must commit the candidate,
+replay the configured gates, record the measured evaluation, revalidate the
+base and SPEC, and use fast-forward-only promotion.

@@ -66,9 +66,13 @@ measurable acceptance condition.
 
 The controller runs all gates against the
 base before dispatch. It records both the baseline and candidate gate vectors.
-A candidate that passes after a baseline failure is an improvement. A candidate
-that preserves a passing vector is a non-regression. A candidate gate failure
-is a regression.
+It records a per-gate pass delta for each observed candidate result. A failed
+gate has a delta of `-1` when it passed at baseline and `0` when it also failed
+at baseline. The controller classifies these outcomes as `regression` and
+`no-improvement`, respectively.
+
+A candidate that passes all gates records the total passing-gate-count delta.
+A positive total is an `improvement`. A zero total is a `non-regression`.
 
 ## Recovery
 
@@ -96,5 +100,5 @@ not discard the handoff evidence.
 - Promotion does not create pull requests or push changes.
 - The controller does not clean failed, stale, blocked, or manual-handoff
   worktrees.
-- Self-improvement comparison is limited to binary gate outcomes. The harness
-  does not rank candidates with richer quality or performance metrics yet.
+- Self-improvement comparison is limited to gate pass deltas. The harness does
+  not rank candidates with richer quality or performance metrics yet.

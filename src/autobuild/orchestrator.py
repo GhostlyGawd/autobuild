@@ -206,6 +206,7 @@ class Orchestrator:
             self.store.transition(claim, RunStatus.EXECUTING, RunStatus.EVALUATING)
             execution_state = RunStatus.EVALUATING
             evaluation_environment = gate_environment(environment, worktree.path)
+            candidate_results: dict[str, bool] = {}
             for gate in self.config.gates:
                 gate_result = run_gate(
                     gate,
@@ -233,15 +234,26 @@ class Orchestrator:
                         ),
                     },
                 )
+                candidate_results[gate.name] = gate_result.passed
                 if not gate_result.passed:
                     if claim.work_item.kind is WorkKind.SELF_IMPROVEMENT:
+                        gate_pass_deltas = {
+                            name: int(passed) - int(baseline_results[name])
+                            for name, passed in candidate_results.items()
+                        }
                         self.store.record_event(
                             claim,
                             "self_improvement_evaluated",
                             {
-                                "classification": "regression",
+                                "classification": (
+                                    "regression"
+                                    if any(delta < 0 for delta in gate_pass_deltas.values())
+                                    else "no-improvement"
+                                ),
                                 "failed_gate": gate.name,
-                                "baseline_passed": baseline_results.get(gate.name),
+                                "baseline_gates": baseline_results,
+                                "candidate_gates": candidate_results,
+                                "gate_pass_deltas": gate_pass_deltas,
                             },
                         )
                     self.store.transition(
@@ -271,20 +283,26 @@ class Orchestrator:
                     worktree.path,
                 )
             if claim.work_item.kind is WorkKind.SELF_IMPROVEMENT:
-                classification = (
-                    "improvement"
-                    if any(not passed for passed in baseline_results.values())
-                    else "non-regression"
+                gate_pass_deltas = {
+                    name: int(candidate_results[name]) - int(passed)
+                    for name, passed in baseline_results.items()
+                }
+                passing_gate_count_delta = sum(candidate_results.values()) - sum(
+                    baseline_results.values()
                 )
                 self.store.record_event(
                     claim,
                     "self_improvement_evaluated",
                     {
-                        "classification": classification,
+                        "classification": (
+                            "improvement"
+                            if passing_gate_count_delta > 0
+                            else "non-regression"
+                        ),
                         "baseline_gates": baseline_results,
-                        "candidate_gates": {
-                            gate.name: True for gate in self.config.gates
-                        },
+                        "candidate_gates": candidate_results,
+                        "gate_pass_deltas": gate_pass_deltas,
+                        "passing_gate_count_delta": passing_gate_count_delta,
                     },
                 )
             current_spec = load_spec(self.root / "SPEC.json")

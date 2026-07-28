@@ -285,4 +285,44 @@ def test_self_improvement_records_baseline_and_improvement(
         "baseline_gate_finished",
         "self_improvement_evaluated",
     ]
-    assert json.loads(rows[1][1])["classification"] == "improvement"
+    evaluation = json.loads(rows[1][1])
+    assert evaluation == {
+        "baseline_gates": {"result": False},
+        "candidate_gates": {"result": True},
+        "classification": "improvement",
+        "gate_pass_deltas": {"result": 1},
+        "passing_gate_count_delta": 1,
+    }
+
+
+def test_self_improvement_does_not_call_an_unchanged_failure_a_regression(
+    git_repository: Path,
+) -> None:
+    write_spec(git_repository, kind="self-improvement")
+    git(git_repository, "add", "SPEC.json")
+    git(git_repository, "commit", "-m", "request self improvement")
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(git_repository, gate_exit=1),
+    )
+
+    outcome = orchestrator.reconcile_once()
+
+    assert outcome.status == "failed"
+    connection = sqlite3.connect(orchestrator.config.state_path)
+    row = connection.execute(
+        """
+        SELECT payload_json FROM events
+        WHERE run_id = ? AND kind = 'self_improvement_evaluated'
+        """,
+        (outcome.run_id,),
+    ).fetchone()
+    connection.close()
+    assert row is not None
+    assert json.loads(row[0]) == {
+        "baseline_gates": {"result": False},
+        "candidate_gates": {"result": False},
+        "classification": "no-improvement",
+        "failed_gate": "result",
+        "gate_pass_deltas": {"result": 0},
+    }
