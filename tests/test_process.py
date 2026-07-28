@@ -8,7 +8,13 @@ from pathlib import Path
 import pytest
 
 from autobuild.models import Gate
-from autobuild.process import redact_text, run_gate, run_process, safe_environment
+from autobuild.process import (
+    gate_environment,
+    redact_text,
+    run_gate,
+    run_process,
+    safe_environment,
+)
 
 
 def test_safe_environment_excludes_unapproved_secret(
@@ -48,6 +54,17 @@ def test_redact_text_removes_environment_and_known_token_shapes(monkeypatch) -> 
     assert "ghp_" not in redacted
     assert "abc.def-123" not in redacted
     assert redacted.count("[REDACTED]") == 3
+
+
+def test_gate_environment_uses_candidate_source_and_isolated_pytest(
+    tmp_path: Path,
+) -> None:
+    environment = gate_environment({"PATH": "test-path"}, tmp_path)
+
+    assert environment["PATH"] == "test-path"
+    assert environment["PYTHONPATH"] == str((tmp_path / "src").resolve())
+    assert environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+    assert environment["PYTHONUTF8"] == "1"
 
 
 def test_gate_arguments_do_not_invoke_a_shell(tmp_path: Path) -> None:

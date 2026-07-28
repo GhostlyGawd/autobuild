@@ -9,6 +9,7 @@ The controller applies these boundaries:
 
 - It runs configured commands with argument arrays and `shell=False`.
 - It gives child processes an allowlisted environment.
+- It gives gates a controller-created source path and isolated pytest setting.
 - It denies allowlisted variables when their names match configured secret-name
   fragments.
 - It redacts inherited secret values and common credential forms before it

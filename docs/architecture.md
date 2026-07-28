@@ -53,6 +53,11 @@ The process runner resolves each configured executable to an explicit path
 before launch. This rule prevents Windows process creation from selecting a
 different executable suffix than the interactive shell selects.
 
+The controller gives verification gates a deterministic Python source path for
+the candidate worktree. It disables ambient pytest plugin autoloading. A gate
+must declare its required plugins through the project environment instead of
+using unrelated globally installed plugins.
+
 ## Self-improvement
 
 Self-improvement uses the normal work-item path. It does not bypass isolation,

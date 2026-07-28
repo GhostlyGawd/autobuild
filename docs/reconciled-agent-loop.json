@@ -76,7 +76,7 @@
   "retries_timeouts": {
     "retry_policy": "The controller renews a current lease during long child processes; a failed or stale item returns to ready until its configured attempt limit is reached",
     "backoff": "The current local controller retries on a later explicit reconciliation cycle; time-based exponential backoff is not implemented",
-    "attempt_limit": 3,
+    "attempt_limit": 5,
     "timeouts": [
       "The agent process has a configured wall-clock timeout",
       "Each verification gate has a configured wall-clock timeout",

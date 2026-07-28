@@ -3,7 +3,7 @@ state_path = ".autobuild/state.db"
 worktree_root = ".autobuild/worktrees"
 result_root = ".autobuild/results"
 lease_seconds = 900
-max_attempts = 3
+max_attempts = 5
 auto_promote = true
 cleanup_succeeded_worktrees = true
 

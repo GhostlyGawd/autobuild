@@ -32,6 +32,17 @@ def safe_environment(
     }
 
 
+def gate_environment(
+    base: Mapping[str, str],
+    worktree: Path,
+) -> dict[str, str]:
+    environment = dict(base)
+    environment["PYTHONPATH"] = str((worktree / "src").resolve())
+    environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    environment["PYTHONUTF8"] = "1"
+    return environment
+
+
 def redact_text(text: str, redacted_name_fragments: tuple[str, ...]) -> str:
     redacted = text
     fragments = tuple(fragment.casefold() for fragment in redacted_name_fragments)

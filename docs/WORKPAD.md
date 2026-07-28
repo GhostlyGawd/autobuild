@@ -26,6 +26,7 @@
 - [x] Dogfood validation and state inspection in this repository.
 - [x] Run a live product reconciliation and preserve its failed adapter evidence.
 - [x] Fix Windows command resolution and terminalize startup exceptions.
+- [x] Fix deterministic source-checkout imports for isolated gates.
 - [x] Add the automated controlled-English precheck and release boundary.
 - [x] Add semantic cleanup for successful worktrees.
 - [ ] Retry the live product reconciliation after the failed run lease expires.
@@ -56,6 +57,7 @@
 | Fresh read before dispatch and promotion | Required | `orchestrator.py`, `gitops.py` | SPEC-change, base-change, and Git integration tests | architecture | Proven for tested local boundaries |
 | Active lease renewal and authority loss | Required | `process.py`, `state.py`, `orchestrator.py` | Heartbeat, renewal, and lost-authority tests | architecture, SECURITY | Proven |
 | Shell-free gate execution | Required | `process.py` | Shell-injection negative | SECURITY | Proven |
+| Deterministic Python gate environment | Required | `process.py`, `orchestrator.py` | Candidate source and pytest-isolation test | README, architecture | Proven |
 | Secret containment and evidence redaction | Required | `process.py`, `orchestrator.py` | Environment and redaction negatives | SECURITY | Proven for configured and known forms |
 | Candidate immutability after verification | Required | `orchestrator.py`, `gitops.py` | Gate-mutation negative | README, architecture | Proven |
 | Isolated, fast-forward-only promotion | Required | `gitops.py` | Git integration tests | README, architecture | Proven |
@@ -76,6 +78,12 @@ The first live product run found a Windows command-resolution defect. Python
 selected a restricted app-package executable instead of the npm command shim.
 The fixed process runner resolves the explicit executable path before launch.
 It also records future startup exceptions as terminal failures.
+
+The second live product run recovered generation 1 and kept generation 2
+current with lease heartbeats. The worker independently passed all checks and
+made no changes. The controller gate then failed because its isolated
+environment did not include the candidate source path. The fixed gate
+environment supplies that path and disables ambient pytest plugin autoloading.
 
 ## Validation evidence
 
@@ -99,11 +107,12 @@ Evidence recorded on 2026-07-28:
 | Start agent process | Executable does not exist | Preserve worktree and record terminal failure | SQLite failed run | `test_agent_startup_error_records_terminal_failure` |
 | Check configured Markdown | Long sentence or paragraph | Return a finding and block the gate | CLI and finding assertions | `test_writing.py` |
 | Clean successful worktree | Dirty worktree | Preserve uncertain content | Git registry and path assertions | `test_cleanup_preserves_dirty_successful_worktree` |
+| Run Python gate | Parent environment has no source path | Import candidate package deterministically | Environment assertion and full gate replay | `test_gate_environment_uses_candidate_source_and_isolated_pytest` |
 
 Commands and outcomes:
 
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q`:
-  33 tests passed.
+  34 tests passed.
 - `python -m ruff check .`: passed.
 - `PYTHONPATH=src python -m autobuild writing-check`: no automated
   findings; final status remained `NOT RELEASED — COMPLIANCE CHECK INCOMPLETE`.
@@ -115,6 +124,8 @@ Commands and outcomes:
   projected both SPEC items and retained the failed live run evidence.
 - Python process-runner probe: resolved `codex` to the npm command shim and
   returned `codex-cli 0.145.0`.
+- Full configured-gate replay with the controller-created gate environment:
+  tests, lint, repository validation, and writing precheck passed.
 
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
@@ -128,9 +139,11 @@ autoloading. A fresh project virtual environment remains the supported setup.
   environment. Other environments must install it or change the adapter.
 - Full ASD-STE100 release evidence is unavailable. Project text is not released
   with a compliance claim.
-- The live run from generation 1 remains in `executing` until its original
-  lease expires. The pre-fix controller ended before it could record failure.
-  The worktree and traceback remain preserved.
+- Generation 1 is stale after its original lease expired. The pre-fix
+  controller ended before it could record failure. The worktree and traceback
+  remain preserved.
+- Generation 2 is terminal failed with its clean candidate and gate output
+  preserved. It proves lease recovery and exposed the source-path defect.
 
 ## Blockers
 
@@ -140,7 +153,6 @@ None for the current implementation slice.
 
 Status: implementation in progress.
 
-Next owner and action: the autonomous orchestrator must commit the adapter and
-writing changes, wait for generation 1 to expire, retry the live product item,
-and evaluate the first self-improvement candidate only after product dogfood
-succeeds.
+Next owner and action: the autonomous orchestrator must commit the deterministic
+gate environment, run generation 3 of the product dogfood item, and evaluate
+the first self-improvement candidate only after product dogfood succeeds.

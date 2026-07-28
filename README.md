@@ -19,6 +19,8 @@ but the project is not production-ready.
 - Runs agents in isolated Git worktrees.
 - Commits a candidate before it runs verification gates.
 - Runs verification gates without a command shell.
+- Gives Python gates the candidate `src` path and disables ambient pytest
+  plugin autoloading.
 - Rejects a candidate if a gate changes the committed content.
 - Revalidates the SPEC and base commit before dispatch and promotion.
 - Cleans a successful worktree only after reachability, path, registration, and

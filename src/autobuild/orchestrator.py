@@ -18,7 +18,7 @@ from .gitops import (
     promote_fast_forward,
 )
 from .models import RunOutcome, RunStatus, WorkKind
-from .process import redact_text, run_gate, safe_environment
+from .process import gate_environment, redact_text, run_gate, safe_environment
 from .spec import load_spec
 from .state import StaleLeaseError, StateStore
 
@@ -151,11 +151,12 @@ class Orchestrator:
             renew_lease()
             self.store.transition(claim, RunStatus.EXECUTING, RunStatus.EVALUATING)
             execution_state = RunStatus.EVALUATING
+            evaluation_environment = gate_environment(environment, worktree.path)
             for gate in self.config.gates:
                 gate_result = run_gate(
                     gate,
                     worktree.path,
-                    environment,
+                    evaluation_environment,
                     heartbeat=renew_lease,
                     heartbeat_interval_seconds=heartbeat_interval,
                 )
