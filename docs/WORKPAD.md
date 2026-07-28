@@ -33,6 +33,8 @@
 - [x] Run the first bounded self-improvement experiment.
 - [x] Add baseline and candidate gate vectors for self-improvement work.
 - [x] Bind achieved state to canonical work-item revisions.
+- [ ] Stop active children after desired-state or base-source authority loss.
+- [ ] Add a renewable controller ownership lease.
 - [ ] Add richer quality metrics and multi-candidate experiment ranking.
 
 ## Acceptance criteria
@@ -107,6 +109,17 @@ Alignment review for canonical work-item identity:
   release, and writing-standard boundaries do not change.
 - Visual meaning remains accurate. The architecture description now names both
   specification identities without changing the control-flow diagram.
+
+Alignment review for the desired-state expansion:
+
+- `SPEC.json` now requests active-run cancellation, controller ownership, and
+  ranked self-improvement experiments.
+- These items are desired work. The implementation does not claim that they
+  are complete.
+- Reviewed and unaffected: README and architecture limitations still describe
+  the implemented controller and candidate-selection behavior.
+- Reviewed and unaffected: security, setup, release, writing-standard, visual,
+  and provenance claims do not change at this desired-state checkpoint.
 
 ## Implementation progress
 
@@ -240,10 +253,8 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: canonical work-item identity is implemented. An unrelated
-`SPEC.json` change no longer reopens an achieved item. The full specification
-digest still fences active runs.
+Status: canonical work-item identity is implemented and live state is migrated.
+Three new bounded outcomes are ready. The two earlier items remain achieved.
 
-Next owner and action: the autonomous orchestrator must validate and migrate
-the live state, push this checkpoint, then add the next bounded work items to
-`SPEC.json`.
+Next owner and action: the autonomous orchestrator must push this desired-state
+checkpoint, then run `active-run-cancellation` through the reconciled loop.

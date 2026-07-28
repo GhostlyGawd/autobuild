@@ -30,7 +30,45 @@
         "The evaluation records a measurable non-regression or improvement.",
         "Promotion is fast-forward only and leaves durable evidence."
       ]
+    },
+    {
+      "id": "active-run-cancellation",
+      "kind": "product",
+      "priority": 90,
+      "objective": "Stop active child processes promptly when the run loses desired-state or source authority.",
+      "acceptance": [
+        "Each child-process heartbeat revalidates the full SPEC digest, base commit, lease generation, and lease time.",
+        "A SPEC or base-commit change stops the child process and makes the run stale.",
+        "An authority-loss event records a bounded durable cause.",
+        "No candidate is evaluated or promoted after authority loss.",
+        "Lifecycle and failure-injection tests pass."
+      ]
+    },
+    {
+      "id": "controller-ownership-lease",
+      "kind": "product",
+      "priority": 80,
+      "objective": "Fence concurrent controllers that use the same state database and base repository.",
+      "acceptance": [
+        "A renewable controller lease has one current owner for each state database and base repository.",
+        "A second controller cannot dispatch or promote while the current owner remains valid.",
+        "A controller restart can recover after the ownership lease expires.",
+        "Read-only validation and status inspection do not require controller ownership.",
+        "Concurrency and recovery tests pass."
+      ]
+    },
+    {
+      "id": "ranked-self-improvement-experiments",
+      "kind": "self-improvement",
+      "priority": 70,
+      "objective": "Evaluate a bounded set of self-improvement candidates and select one with deterministic quality evidence.",
+      "acceptance": [
+        "Configuration bounds the number and duration of candidate experiments.",
+        "Each candidate has isolated source state, gate results, and a deterministic score.",
+        "Only an all-pass non-regressing candidate can win.",
+        "A deterministic tie-break selects at most one candidate for promotion.",
+        "The state store preserves candidate rankings and the promotion decision."
+      ]
     }
   ]
 }
-
