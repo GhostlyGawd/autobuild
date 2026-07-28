@@ -42,6 +42,11 @@ visual source.
 The controller uses an observation, comparison, action, and re-observation loop.
 A process exit is execution evidence. It is not semantic success.
 
+The controller renews the current lease while an agent or gate process runs.
+It stops the child process if renewal shows that the run lost authority. It
+also renews the lease at controller boundaries before it records evidence,
+commits a candidate, or changes execution state.
+
 ## Self-improvement
 
 Self-improvement uses the normal work-item path. It does not bypass isolation,
@@ -68,7 +73,6 @@ not discard the handoff evidence.
 - The lease uses wall-clock time and does not provide a distributed consensus
   guarantee.
 - The Codex adapter is the only live agent adapter.
-- The harness does not renew leases during a long agent or gate process yet.
 - Promotion does not create pull requests or push changes.
 - The controller preserves worktrees but does not yet reconcile and clean
   terminal worktrees.

@@ -21,6 +21,7 @@ def test_candidate_promotes_by_fast_forward(git_repository: Path) -> None:
         git_repository / ".autobuild" / "worktrees",
         "run-one",
         "task",
+        base,
     )
     (worktree.path / "candidate.txt").write_text("verified\n", encoding="utf-8")
     candidate = commit_candidate(worktree, "candidate")
@@ -38,6 +39,7 @@ def test_base_change_prevents_promotion(git_repository: Path) -> None:
         git_repository / ".autobuild" / "worktrees",
         "run-two",
         "task",
+        base,
     )
     (worktree.path / "candidate.txt").write_text("candidate\n", encoding="utf-8")
     commit_candidate(worktree, "candidate")

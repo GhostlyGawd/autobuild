@@ -19,7 +19,7 @@ from .gitops import (
 from .models import RunOutcome, RunStatus, WorkKind
 from .process import redact_text, run_gate, safe_environment
 from .spec import load_spec
-from .state import StateStore
+from .state import StaleLeaseError, StateStore
 
 
 class Orchestrator:
@@ -66,7 +66,27 @@ class Orchestrator:
                 self.config.worktree_root,
                 claim.run_id,
                 claim.work_item.id,
+                claim.base_commit,
             )
+            current_spec = load_spec(self.root / "SPEC.json")
+            if (
+                current_spec.digest != claim.spec_digest
+                or current_commit(self.root) != claim.base_commit
+                or not is_clean(self.root)
+            ):
+                self.store.transition(
+                    claim,
+                    RunStatus.LEASED,
+                    RunStatus.STALE,
+                    detail="desired state changed at dispatch",
+                    worktree=worktree.path,
+                )
+                return RunOutcome(
+                    claim.run_id,
+                    "stale",
+                    "desired state changed at dispatch",
+                    worktree.path,
+                )
             self.store.transition(
                 claim,
                 RunStatus.LEASED,
@@ -78,6 +98,14 @@ class Orchestrator:
                 self.config.policy.allowed_environment,
                 self.config.policy.redacted_name_fragments,
             )
+            heartbeat_interval = max(
+                0.1,
+                min(30.0, self.config.lease_seconds / 3),
+            )
+
+            def renew_lease() -> None:
+                self.store.renew_lease(claim, self.config.lease_seconds)
+
             result = run_agent(
                 self.config.agent,
                 claim.work_item,
@@ -85,7 +113,10 @@ class Orchestrator:
                 worktree.path,
                 self.config.result_root / f"{claim.run_id}.txt",
                 environment,
+                heartbeat=renew_lease,
+                heartbeat_interval_seconds=heartbeat_interval,
             )
+            renew_lease()
             self.store.record_event(
                 claim,
                 "agent_finished",
@@ -112,13 +143,22 @@ class Orchestrator:
                     worktree.path,
                 )
 
+            renew_lease()
             candidate = commit_candidate(
                 worktree, f"autobuild: complete {claim.work_item.id}"
             )
+            renew_lease()
             self.store.transition(claim, RunStatus.EXECUTING, RunStatus.EVALUATING)
             execution_state = RunStatus.EVALUATING
             for gate in self.config.gates:
-                gate_result = run_gate(gate, worktree.path, environment)
+                gate_result = run_gate(
+                    gate,
+                    worktree.path,
+                    environment,
+                    heartbeat=renew_lease,
+                    heartbeat_interval_seconds=heartbeat_interval,
+                )
+                renew_lease()
                 self.store.record_event(
                     claim,
                     "gate_finished",
@@ -168,6 +208,7 @@ class Orchestrator:
             if (
                 current_spec.digest != claim.spec_digest
                 or current_commit(self.root) != claim.base_commit
+                or not is_clean(self.root)
             ):
                 self.store.transition(
                     claim,
@@ -208,6 +249,14 @@ class Orchestrator:
                 "succeeded",
                 f"promoted {promoted}",
                 worktree.path,
+            )
+        except StaleLeaseError as error:
+            self.store.expire_claim(claim, f"lease lost: {error}")
+            return RunOutcome(
+                claim.run_id,
+                "stale",
+                f"lease lost: {error}",
+                worktree.path if worktree else None,
             )
         except GitError as error:
             with suppress(Exception):

@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
+import pytest
+
 from autobuild.models import Gate
-from autobuild.process import redact_text, run_gate, safe_environment
+from autobuild.process import redact_text, run_gate, run_process, safe_environment
 
 
 def test_safe_environment_excludes_unapproved_secret(
@@ -64,3 +67,37 @@ def test_gate_arguments_do_not_invoke_a_shell(tmp_path: Path) -> None:
 
     assert result.passed
     assert not marker.exists()
+
+
+def test_process_calls_heartbeat_during_long_run(tmp_path: Path) -> None:
+    calls = []
+
+    result = run_process(
+        (sys.executable, "-c", "import time; time.sleep(0.3)"),
+        tmp_path,
+        os.environ,
+        2,
+        heartbeat=lambda: calls.append(time.monotonic()),
+        heartbeat_interval_seconds=0.05,
+    )
+
+    assert result.passed
+    assert len(calls) >= 2
+
+
+def test_process_stops_if_heartbeat_loses_authority(tmp_path: Path) -> None:
+    class AuthorityLost(RuntimeError):
+        pass
+
+    started = time.monotonic()
+    with pytest.raises(AuthorityLost):
+        run_process(
+            (sys.executable, "-c", "import time; time.sleep(5)"),
+            tmp_path,
+            os.environ,
+            10,
+            heartbeat=lambda: (_ for _ in ()).throw(AuthorityLost()),
+            heartbeat_interval_seconds=0.05,
+        )
+
+    assert time.monotonic() - started < 2

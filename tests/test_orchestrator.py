@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import git, write_spec
 
 import autobuild.orchestrator as orchestrator_module
 from autobuild.config import AgentConfig, Config, PolicyConfig
@@ -18,13 +19,15 @@ def config_for(
     gate_exit: int,
     gate_code: str | None = None,
     auto_promote: bool = True,
+    lease_seconds: int = 60,
+    agent_code: str | None = None,
 ) -> Config:
     return Config(
         root=root,
         state_path=root / ".autobuild" / "state.db",
         worktree_root=root / ".autobuild" / "worktrees",
         result_root=root / ".autobuild" / "results",
-        lease_seconds=60,
+        lease_seconds=lease_seconds,
         max_attempts=3,
         auto_promote=auto_promote,
         agent=AgentConfig(
@@ -32,7 +35,8 @@ def config_for(
             command=(
                 sys.executable,
                 "-c",
-                "from pathlib import Path; Path('candidate.txt').write_text('candidate\\n')",
+                agent_code
+                or "from pathlib import Path; Path('candidate.txt').write_text('candidate\\n')",
             ),
             timeout_seconds=10,
         ),
@@ -80,7 +84,7 @@ def test_success_promotes_candidate_and_marks_item_achieved(
 
     outcome = orchestrator.reconcile_once()
 
-    assert outcome.status == "succeeded"
+    assert outcome.status == "succeeded", outcome.detail
     assert current_commit(git_repository) != base
     assert (git_repository / "candidate.txt").read_text(encoding="utf-8") == "candidate\n"
     assert orchestrator.store.status()["work_items"][0]["status"] == "achieved"
@@ -142,3 +146,76 @@ def test_manual_promotion_policy_enters_stable_handoff(
     assert outcome.status == "awaiting-promotion"
     assert orchestrator.store.status()["recent_runs"][0]["status"] == "awaiting-promotion"
     assert orchestrator.store.status()["work_items"][0]["status"] == "blocked"
+
+
+def test_long_agent_renews_short_lease(git_repository: Path) -> None:
+    agent_code = (
+        "import time; "
+        "from pathlib import Path; "
+        "time.sleep(2.4); "
+        "Path('candidate.txt').write_text('candidate\\n')"
+    )
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(
+            git_repository,
+            gate_exit=0,
+            lease_seconds=2,
+            agent_code=agent_code,
+        ),
+    )
+
+    outcome = orchestrator.reconcile_once()
+
+    assert outcome.status == "succeeded", outcome.detail
+    assert orchestrator.store.status()["recent_runs"][0]["status"] == "succeeded"
+
+
+def test_dispatch_stops_after_spec_change(
+    git_repository: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(git_repository, gate_exit=0),
+    )
+    original_claim = orchestrator.store.claim_next
+
+    def claim_then_change_spec(*args, **kwargs):
+        claim = original_claim(*args, **kwargs)
+        write_spec(git_repository, item_id="changed-task")
+        return claim
+
+    monkeypatch.setattr(orchestrator.store, "claim_next", claim_then_change_spec)
+
+    outcome = orchestrator.reconcile_once()
+
+    assert outcome.status == "stale"
+    assert outcome.detail == "desired state changed before dispatch"
+    assert outcome.worktree is None
+
+
+def test_dispatch_stops_after_base_change(
+    git_repository: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    orchestrator = Orchestrator(
+        git_repository,
+        config_for(git_repository, gate_exit=0),
+    )
+    original_claim = orchestrator.store.claim_next
+
+    def claim_then_change_base(*args, **kwargs):
+        claim = original_claim(*args, **kwargs)
+        (git_repository / "concurrent.txt").write_text("changed\n", encoding="utf-8")
+        git(git_repository, "add", "concurrent.txt")
+        git(git_repository, "commit", "-m", "concurrent base change")
+        return claim
+
+    monkeypatch.setattr(orchestrator.store, "claim_next", claim_then_change_base)
+
+    outcome = orchestrator.reconcile_once()
+
+    assert outcome.status == "stale"
+    assert outcome.detail == "desired state changed before dispatch"
+    assert outcome.worktree is None

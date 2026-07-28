@@ -74,7 +74,7 @@
     ]
   },
   "retries_timeouts": {
-    "retry_policy": "A failed or stale item returns to ready until its configured attempt limit is reached",
+    "retry_policy": "The controller renews a current lease during long child processes; a failed or stale item returns to ready until its configured attempt limit is reached",
     "backoff": "The current local controller retries on a later explicit reconciliation cycle; time-based exponential backoff is not implemented",
     "attempt_limit": 3,
     "timeouts": [
@@ -84,7 +84,7 @@
     ]
   },
   "restart_stale_events": {
-    "restart_behavior": "Initialize the schema, expire old nonterminal leases, preserve their artifacts, and create a new generation only on a later claim",
+    "restart_behavior": "Initialize the schema, expire old nonterminal leases, preserve their artifacts, and create a new generation only on a later claim; a child process stops if heartbeat renewal loses authority",
     "fencing_token": "The pair of run id and monotonically increasing per-item generation, checked with lease expiration and expected state",
     "stale_event_disposition": "Reject the state change and retain the prior durable event history"
   },
@@ -190,10 +190,10 @@
       "entry": "Worktree creation succeeds and the current lease transitions from leased",
       "exit": "Agent failure goes to failed; agent success goes to evaluating",
       "revalidation": "Validate the fenced transition before and after the child process",
-      "retry_timeout": "Agent wall-clock timeout fails the run",
+      "retry_timeout": "A heartbeat renews the lease; agent timeout or lost renewal stops the child and fails or stales the run",
       "restart": "An expired lease makes the run stale; preserve the worktree",
       "disposal": "Preserve the worktree and bounded result summary",
-      "proof": "test_agent_timeout_preserves_failed_candidate"
+      "proof": "test_long_agent_renews_short_lease and test_process_stops_if_heartbeat_loses_authority"
     },
     {
       "name": "evaluating",
@@ -202,7 +202,7 @@
       "entry": "The agent exits successfully under the current lease",
       "exit": "Any failed gate fails the run; all passed gates continue to fresh revalidation",
       "revalidation": "Validate the lease for each recorded gate result",
-      "retry_timeout": "Each gate timeout fails the run",
+      "retry_timeout": "A heartbeat renews the lease; gate timeout or lost renewal stops the child and fails or stales the run",
       "restart": "An expired lease makes the run stale; preserve results",
       "disposal": "Preserve gate output in bounded event evidence",
       "proof": "test_gate_failure_prevents_promotion"
@@ -310,6 +310,20 @@
       "failure_injection": "Policy denies automatic promotion",
       "expected_semantic_outcome": "The verified candidate and evidence remain stable without lease expiry",
       "durable_evidence": "Awaiting-promotion run, blocked item, and preserved worktree"
+    },
+    {
+      "sequence": "run an agent longer than the original lease and complete all gates",
+      "transition": "executing with repeated lease renewal to evaluating and succeeded",
+      "failure_injection": "Agent duration exceeds the original lease duration",
+      "expected_semantic_outcome": "The current generation retains authority and can promote the verified candidate",
+      "durable_evidence": "Renewed lease time, succeeded run, and promoted commit"
+    },
+    {
+      "sequence": "claim an item, change the SPEC or base commit, then reach the dispatch boundary",
+      "transition": "leased to stale",
+      "failure_injection": "Desired state changes after the claim transaction",
+      "expected_semantic_outcome": "No worktree or agent process is dispatched",
+      "durable_evidence": "Stale run detail and dispatch test assertions"
     }
   ]
 }

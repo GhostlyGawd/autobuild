@@ -6,10 +6,10 @@ import os
 import re
 import subprocess
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from .models import Gate, GateResult
+from .models import Gate, GateResult, ProcessResult
 
 _OUTPUT_LIMIT = 64_000
 _CREDENTIAL_PATTERN = re.compile(
@@ -45,36 +45,89 @@ def redact_text(text: str, redacted_name_fragments: tuple[str, ...]) -> str:
     return _BEARER_PATTERN.sub(r"\1[REDACTED]", redacted)
 
 
-def run_gate(gate: Gate, cwd: Path, environment: Mapping[str, str]) -> GateResult:
+def run_process(
+    command: tuple[str, ...],
+    cwd: Path,
+    environment: Mapping[str, str],
+    timeout_seconds: float,
+    *,
+    input_text: str | None = None,
+    heartbeat: Callable[[], None] | None = None,
+    heartbeat_interval_seconds: float = 30.0,
+) -> ProcessResult:
+    if timeout_seconds <= 0:
+        raise ValueError("timeout_seconds must be positive")
+    if heartbeat_interval_seconds <= 0:
+        raise ValueError("heartbeat_interval_seconds must be positive")
     started = time.monotonic()
-    try:
-        process = subprocess.run(
-            gate.command,
-            cwd=cwd,
-            env=dict(environment),
-            capture_output=True,
-            text=True,
-            timeout=gate.timeout_seconds,
-            shell=False,
-            check=False,
-        )
-        return GateResult(
-            name=gate.name,
-            command=gate.command,
-            returncode=process.returncode,
-            duration_seconds=time.monotonic() - started,
-            stdout=process.stdout[-_OUTPUT_LIMIT:],
-            stderr=process.stderr[-_OUTPUT_LIMIT:],
-        )
-    except subprocess.TimeoutExpired as error:
-        stdout = error.stdout.decode() if isinstance(error.stdout, bytes) else (error.stdout or "")
-        stderr = error.stderr.decode() if isinstance(error.stderr, bytes) else (error.stderr or "")
-        return GateResult(
-            name=gate.name,
-            command=gate.command,
-            returncode=None,
-            duration_seconds=time.monotonic() - started,
-            stdout=stdout[-_OUTPUT_LIMIT:],
-            stderr=stderr[-_OUTPUT_LIMIT:],
-            timed_out=True,
-        )
+    deadline = started + timeout_seconds
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=dict(environment),
+        stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        shell=False,
+    )
+    pending_input = input_text
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            process.kill()
+            stdout, stderr = process.communicate()
+            return ProcessResult(
+                returncode=None,
+                duration_seconds=time.monotonic() - started,
+                stdout=stdout[-_OUTPUT_LIMIT:],
+                stderr=stderr[-_OUTPUT_LIMIT:],
+                timed_out=True,
+            )
+        try:
+            stdout, stderr = process.communicate(
+                input=pending_input,
+                timeout=min(remaining, heartbeat_interval_seconds),
+            )
+            return ProcessResult(
+                returncode=process.returncode,
+                duration_seconds=time.monotonic() - started,
+                stdout=stdout[-_OUTPUT_LIMIT:],
+                stderr=stderr[-_OUTPUT_LIMIT:],
+            )
+        except subprocess.TimeoutExpired:
+            pending_input = None
+            if heartbeat is not None:
+                try:
+                    heartbeat()
+                except BaseException:
+                    process.kill()
+                    process.communicate()
+                    raise
+
+
+def run_gate(
+    gate: Gate,
+    cwd: Path,
+    environment: Mapping[str, str],
+    *,
+    heartbeat: Callable[[], None] | None = None,
+    heartbeat_interval_seconds: float = 30.0,
+) -> GateResult:
+    result = run_process(
+        gate.command,
+        cwd,
+        environment,
+        gate.timeout_seconds,
+        heartbeat=heartbeat,
+        heartbeat_interval_seconds=heartbeat_interval_seconds,
+    )
+    return GateResult(
+        name=gate.name,
+        command=gate.command,
+        returncode=result.returncode,
+        duration_seconds=result.duration_seconds,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        timed_out=result.timed_out,
+    )

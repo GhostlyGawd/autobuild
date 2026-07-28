@@ -326,6 +326,60 @@ class StateStore:
                     (now, claim.work_item.id),
                 )
 
+    def renew_lease(self, claim: Claim, lease_seconds: int) -> None:
+        now_value = _now()
+        now = _timestamp(now_value)
+        lease_expires_at = _timestamp(now_value + timedelta(seconds=lease_seconds))
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE runs
+                SET lease_expires_at = ?, updated_at = ?
+                WHERE id = ? AND generation = ? AND lease_expires_at > ?
+                  AND status IN ('leased', 'executing', 'evaluating', 'promoting')
+                """,
+                (
+                    lease_expires_at,
+                    now,
+                    claim.run_id,
+                    claim.generation,
+                    now,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise StaleLeaseError(
+                    f"run {claim.run_id} generation {claim.generation} cannot renew"
+                )
+
+    def expire_claim(self, claim: Claim, detail: str) -> bool:
+        now = _timestamp()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE runs
+                SET status = 'stale', detail = ?, updated_at = ?
+                WHERE id = ? AND generation = ?
+                  AND status IN ('leased', 'executing', 'evaluating', 'promoting')
+                """,
+                (detail, now, claim.run_id, claim.generation),
+            )
+            if cursor.rowcount != 1:
+                return False
+            connection.execute(
+                "UPDATE work_items SET status = 'ready', updated_at = ? WHERE id = ?",
+                (now, claim.work_item.id),
+            )
+            connection.execute(
+                "INSERT INTO events(run_id, kind, payload_json, created_at) VALUES(?, ?, ?, ?)",
+                (
+                    claim.run_id,
+                    "lease_lost",
+                    json.dumps({"detail": detail}),
+                    now,
+                ),
+            )
+            return True
+
     def record_event(self, claim: Claim, kind: str, payload: dict[str, object]) -> None:
         now = _timestamp()
         with self._connect() as connection:

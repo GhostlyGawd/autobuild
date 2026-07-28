@@ -85,6 +85,44 @@ def test_restart_expires_lease_and_uses_higher_generation(
         store.record_event(first, "late", {})
 
 
+def test_active_run_renews_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = datetime(2026, 7, 28, tzinfo=UTC)
+    monkeypatch.setattr(state_module, "_now", lambda: clock)
+    store = StateStore(tmp_path / "state.db")
+    store.initialize()
+    desired = specification(("task", 1))
+    store.sync_spec(desired)
+    claim = store.claim_next(desired, "base", 2, 3)
+    assert claim is not None
+    store.transition(claim, RunStatus.LEASED, RunStatus.EXECUTING)
+
+    clock += timedelta(seconds=1)
+    store.renew_lease(claim, 5)
+    clock += timedelta(seconds=2)
+
+    assert store.claim_next(desired, "base", 2, 3) is None
+    assert store.status()["recent_runs"][0]["status"] == "executing"
+
+
+def test_expired_run_cannot_renew_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = datetime(2026, 7, 28, tzinfo=UTC)
+    monkeypatch.setattr(state_module, "_now", lambda: clock)
+    store = StateStore(tmp_path / "state.db")
+    store.initialize()
+    desired = specification(("task", 1))
+    store.sync_spec(desired)
+    claim = store.claim_next(desired, "base", 1, 3)
+    assert claim is not None
+    clock += timedelta(seconds=2)
+
+    with pytest.raises(StaleLeaseError):
+        store.renew_lease(claim, 5)
+
+
 def test_attempt_limit_marks_item_blocked(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "state.db")
     store.initialize()
@@ -125,4 +163,3 @@ def test_success_marks_item_achieved(tmp_path: Path) -> None:
     store.transition(claim, RunStatus.PROMOTING, RunStatus.SUCCEEDED)
 
     assert store.status()["work_items"][0]["status"] == "achieved"
-

@@ -96,6 +96,19 @@ class AgentResult:
 
 
 @dataclass(frozen=True)
+class ProcessResult:
+    returncode: int | None
+    duration_seconds: float
+    stdout: str
+    stderr: str
+    timed_out: bool = False
+
+    @property
+    def passed(self) -> bool:
+        return not self.timed_out and self.returncode == 0
+
+
+@dataclass(frozen=True)
 class RunOutcome:
     run_id: str | None
     status: str

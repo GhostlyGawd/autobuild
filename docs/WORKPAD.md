@@ -21,6 +21,8 @@
 - [x] Implement SPEC loading, durable state, fenced claims, the Codex adapter,
   gate execution, isolated worktrees, and fast-forward promotion.
 - [x] Prove the current lifecycle and security matrix with deterministic tests.
+- [x] Add active lease renewal for agent and gate processes.
+- [x] Prove dispatch rejection after a SPEC or base-commit change.
 - [ ] Dogfood validation and state inspection in this repository.
 - [ ] Run the first bounded self-improvement experiment.
 - [ ] Add lease renewal, terminal cleanup reconciliation, and comparative
@@ -46,7 +48,8 @@
 | SPEC owns desired state | Required | `spec.py`, `orchestrator.py` | SPEC and orchestrator tests | README, architecture | Proven for current local flow |
 | SQLite owns leases and events | Required | `state.py` | State lifecycle tests | architecture | Proven for current local flow |
 | Generation fences stale events | Required | `state.py` | Stale and restart tests | lifecycle contract | Proven |
-| Fresh read before dispatch and promotion | Required | `orchestrator.py` | Git and orchestrator tests | architecture | Partly proven; dispatch race injection remains |
+| Fresh read before dispatch and promotion | Required | `orchestrator.py`, `gitops.py` | SPEC-change, base-change, and Git integration tests | architecture | Proven for tested local boundaries |
+| Active lease renewal and authority loss | Required | `process.py`, `state.py`, `orchestrator.py` | Heartbeat, renewal, and lost-authority tests | architecture, SECURITY | Proven |
 | Shell-free gate execution | Required | `process.py` | Shell-injection negative | SECURITY | Proven |
 | Secret containment and evidence redaction | Required | `process.py`, `orchestrator.py` | Environment and redaction negatives | SECURITY | Proven for configured and known forms |
 | Candidate immutability after verification | Required | `orchestrator.py`, `gitops.py` | Gate-mutation negative | README, architecture | Proven |
@@ -57,9 +60,10 @@
 ## Implementation progress
 
 The first implementation slice provides a standard-library runtime and a
-Codex CLI adapter. The controller commits a candidate before evaluation and
-rejects gate mutations. It preserves failed, stale, and manual-handoff
-worktrees. It does not yet renew an active lease or clean terminal worktrees.
+Codex CLI adapter. The controller renews leases during long child processes,
+commits a candidate before evaluation, and rejects gate mutations. It preserves
+failed, stale, and manual-handoff worktrees. It does not yet clean terminal
+worktrees.
 
 ## Validation evidence
 
@@ -76,11 +80,15 @@ Evidence recorded on 2026-07-28:
 | Configure manual promotion | Automatic promotion disabled | Stable handoff | Awaiting run and blocked item | `test_manual_promotion_policy_enters_stable_handoff` |
 | Build child environment | Secret name is allowlisted | Exclude secret | Process environment assertion | `test_safe_environment_rejects_secret_name_even_if_allowed` |
 | Record process text | Known secret forms present | Redact values | Redacted text assertion | `test_redact_text_removes_environment_and_known_token_shapes` |
+| Run long agent | Agent exceeds original lease | Renew authority and succeed | SQLite lease and succeeded run | `test_long_agent_renews_short_lease` |
+| Run child process | Heartbeat loses authority | Stop child promptly | Exception and elapsed-time assertion | `test_process_stops_if_heartbeat_loses_authority` |
+| Dispatch claimed item | SPEC changes after claim | Mark stale without worktree | SQLite stale run | `test_dispatch_stops_after_spec_change` |
+| Dispatch claimed item | Base commit changes after claim | Mark stale without worktree | SQLite stale run and Git commit | `test_dispatch_stops_after_base_change` |
 
 Commands and outcomes:
 
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q`:
-  21 tests passed.
+  28 tests passed.
 - `python -m ruff check .`: passed.
 - `PYTHONPATH=src python -m autobuild validate --skip-git-clean`: configuration,
   SPEC, executable, and Draft 2020-12 lifecycle-contract checks passed.
@@ -106,6 +114,6 @@ None for the current implementation slice.
 
 Status: implementation in progress.
 
-Next owner and action: the autonomous orchestrator must add active lease
-renewal, prove dispatch revalidation under injected SPEC or base movement, and
-then dogfood repository validation and state inspection.
+Next owner and action: the autonomous orchestrator must dogfood repository
+validation and state inspection, then implement the automated controlled-English
+precheck without making a full ASD-STE100 compliance claim.

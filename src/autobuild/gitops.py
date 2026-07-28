@@ -48,8 +48,15 @@ class Worktree:
     base_commit: str
 
 
-def create_worktree(root: Path, worktree_root: Path, run_id: str, item_id: str) -> Worktree:
-    base_commit = current_commit(root)
+def create_worktree(
+    root: Path,
+    worktree_root: Path,
+    run_id: str,
+    item_id: str,
+    expected_base: str,
+) -> Worktree:
+    if current_commit(root) != expected_base:
+        raise GitError("base commit changed before worktree creation")
     branch = f"autobuild/{_safe_fragment(item_id)}/{run_id[:8]}"
     path = (worktree_root / run_id).resolve()
     try:
@@ -59,8 +66,8 @@ def create_worktree(root: Path, worktree_root: Path, run_id: str, item_id: str) 
     if path.exists():
         raise GitError(f"worktree path already exists: {path}")
     worktree_root.mkdir(parents=True, exist_ok=True)
-    _git(root, "worktree", "add", "-b", branch, str(path), base_commit)
-    return Worktree(path=path, branch=branch, base_commit=base_commit)
+    _git(root, "worktree", "add", "-b", branch, str(path), expected_base)
+    return Worktree(path=path, branch=branch, base_commit=expected_base)
 
 
 def has_changes(worktree: Worktree) -> bool:
@@ -75,6 +82,8 @@ def commit_candidate(worktree: Worktree, message: str) -> str:
 
 
 def promote_fast_forward(root: Path, worktree: Worktree, expected_base: str) -> str:
+    if not is_clean(root):
+        raise GitError("base repository changed before promotion")
     if current_commit(root) != expected_base:
         raise GitError("base commit changed before promotion")
     candidate = current_commit(worktree.path)
@@ -83,4 +92,3 @@ def promote_fast_forward(root: Path, worktree: Worktree, expected_base: str) -> 
         raise GitError("candidate is not a descendant of the expected base")
     _git(root, "merge", "--ff-only", candidate)
     return current_commit(root)
-

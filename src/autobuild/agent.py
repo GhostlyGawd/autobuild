@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 
 from .config import AgentConfig
 from .models import AgentResult, WorkItem
+from .process import run_process
 
 _OUTPUT_LIMIT = 64_000
 
@@ -42,6 +42,9 @@ def run_agent(
     worktree: Path,
     result_file: Path,
     environment: Mapping[str, str],
+    *,
+    heartbeat=None,
+    heartbeat_interval_seconds: float = 30.0,
 ) -> AgentResult:
     result_file.parent.mkdir(parents=True, exist_ok=True)
     command = (
@@ -52,32 +55,20 @@ def run_agent(
         str(result_file),
         "-",
     )
-    try:
-        process = subprocess.run(
-            command,
-            cwd=worktree,
-            env=dict(environment),
-            input=build_prompt(item, base_commit),
-            capture_output=True,
-            text=True,
-            timeout=config.timeout_seconds,
-            shell=False,
-            check=False,
-        )
-        summary = result_file.read_text(encoding="utf-8") if result_file.exists() else ""
-        return AgentResult(
-            returncode=process.returncode,
-            summary=summary[-_OUTPUT_LIMIT:],
-            stdout=process.stdout[-_OUTPUT_LIMIT:],
-            stderr=process.stderr[-_OUTPUT_LIMIT:],
-        )
-    except subprocess.TimeoutExpired as error:
-        stdout = error.stdout.decode() if isinstance(error.stdout, bytes) else (error.stdout or "")
-        stderr = error.stderr.decode() if isinstance(error.stderr, bytes) else (error.stderr or "")
-        return AgentResult(
-            returncode=None,
-            summary="",
-            stdout=stdout[-_OUTPUT_LIMIT:],
-            stderr=stderr[-_OUTPUT_LIMIT:],
-            timed_out=True,
-        )
+    result = run_process(
+        command,
+        worktree,
+        environment,
+        config.timeout_seconds,
+        input_text=build_prompt(item, base_commit),
+        heartbeat=heartbeat,
+        heartbeat_interval_seconds=heartbeat_interval_seconds,
+    )
+    summary = result_file.read_text(encoding="utf-8") if result_file.exists() else ""
+    return AgentResult(
+        returncode=result.returncode,
+        summary=summary[-_OUTPUT_LIMIT:],
+        stdout=result.stdout[-_OUTPUT_LIMIT:],
+        stderr=result.stderr[-_OUTPUT_LIMIT:],
+        timed_out=result.timed_out,
+    )

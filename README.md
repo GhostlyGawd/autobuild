@@ -14,6 +14,8 @@ but the project is not production-ready.
 - Keeps execution state and evidence in SQLite.
 - Reconciles desired state instead of trusting a worker process.
 - Uses lease generations to reject stale worker events.
+- Renews active leases while an agent or verification gate runs.
+- Stops the child process if lease renewal loses authority.
 - Runs agents in isolated Git worktrees.
 - Commits a candidate before it runs verification gates.
 - Runs verification gates without a command shell.

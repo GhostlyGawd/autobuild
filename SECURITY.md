@@ -17,6 +17,8 @@ The controller applies these boundaries:
 - It commits the candidate before verification and rejects later gate changes.
 - It revalidates the SPEC digest and base commit before dispatch and promotion.
 - It rejects events that have an expired or stale lease generation.
+- It renews the lease during long agent and gate processes and stops the child
+  process if renewal loses authority.
 - It uses fast-forward-only promotion.
 - It preserves failed worktrees for inspection.
 
