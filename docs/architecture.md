@@ -143,9 +143,12 @@ treat the successful worktree as a worktree that contains submodules.
 For self-improvement, this rejection has the bounded
 `artifact-rejected` classification. SQLite records a rejected candidate with
 null gate results, no candidate commit, no quality vector, and no eligibility.
-The controller preserves that worktree and continues the remaining isolated
-candidates. If all candidates are rejected, the run records
-`no-eligible-candidate` and does not create promotion intent.
+SQLite rejects candidate states outside the bounded status and classification
+vocabulary. After it stores an artifact rejection, it does not let that
+candidate become a different disposition. The controller preserves that
+worktree and continues the remaining isolated candidates. If all candidates
+are rejected, the run records `no-eligible-candidate` and does not create
+promotion intent.
 
 After the gates, the controller measures each committed candidate against the
 claimed base with Git `--numstat`. The quality vector contains changed files,

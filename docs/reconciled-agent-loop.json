@@ -77,7 +77,7 @@
       "resource": "Self-improvement quality evidence",
       "owner": "Committed Git comparison and constrained SQLite records",
       "failure_domain": "A generated nested repository or worker-supplied value cannot define eligibility, rank, or promotion",
-      "authority_loss_behavior": "Reject each added Gitlink before a candidate commit; record bounded rejection evidence without gates or quality; preserve the worktree; continue later candidates; and reject an inconsistent quality vector, rank, or promotion decision"
+      "authority_loss_behavior": "Reject each added Gitlink before a candidate commit; record bounded rejection evidence without gates or quality; do not rewrite that rejection as another candidate disposition; preserve the worktree; continue later candidates; and reject an unknown candidate state, inconsistent quality vector, rank, or promotion decision"
     }
   ],
   "reconciliation": {

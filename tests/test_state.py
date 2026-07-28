@@ -269,6 +269,31 @@ def test_artifact_rejected_candidate_requires_bounded_evidence(
         controller_lease=controller,
     )
 
+    for status, classification in (
+        ("unknown", "pending"),
+        ("executing", "unknown"),
+    ):
+        with pytest.raises(
+            ValueError,
+            match="experiment candidate evidence is not bounded",
+        ):
+            store.record_experiment_candidate(
+                claim,
+                candidate_id="candidate-001",
+                ordinal=1,
+                worktree=tmp_path / "candidate",
+                candidate_commit=None,
+                status=status,
+                classification=classification,
+                gate_results={},
+                score=0,
+                all_pass=False,
+                non_regressing=False,
+                eligible=False,
+                quality=None,
+                controller_lease=controller,
+            )
+
     with pytest.raises(
         ValueError,
         match="artifact-rejected experiment evidence is invalid",
@@ -291,6 +316,65 @@ def test_artifact_rejected_candidate_requires_bounded_evidence(
         )
 
     assert store.status()["candidate_rankings"] == []
+
+    with pytest.raises(
+        ValueError,
+        match="artifact-rejected experiment evidence is invalid",
+    ):
+        store.record_experiment_candidate(
+            claim,
+            candidate_id="candidate-001",
+            ordinal=1,
+            worktree=tmp_path / "candidate",
+            candidate_commit=None,
+            status="rejected",
+            classification="agent-failed",
+            gate_results={"test": None},
+            score=0,
+            all_pass=False,
+            non_regressing=False,
+            eligible=False,
+            quality=None,
+            controller_lease=controller,
+        )
+
+    store.record_experiment_candidate(
+        claim,
+        candidate_id="candidate-001",
+        ordinal=1,
+        worktree=tmp_path / "candidate",
+        candidate_commit=None,
+        status="rejected",
+        classification="artifact-rejected",
+        gate_results={"test": None},
+        score=0,
+        all_pass=False,
+        non_regressing=False,
+        eligible=False,
+        quality=None,
+        controller_lease=controller,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="artifact-rejected candidate evidence is immutable",
+    ):
+        store.record_experiment_candidate(
+            claim,
+            candidate_id="candidate-001",
+            ordinal=1,
+            worktree=tmp_path / "candidate",
+            candidate_commit=None,
+            status="executing",
+            classification="pending",
+            gate_results={},
+            score=0,
+            all_pass=False,
+            non_regressing=False,
+            eligible=False,
+            quality=None,
+            controller_lease=controller,
+        )
 
 
 def test_restart_expires_lease_and_uses_higher_generation(

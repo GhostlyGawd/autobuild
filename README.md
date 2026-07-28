@@ -29,7 +29,9 @@ but the project is not production-ready.
 - Commits a candidate before it runs verification gates.
 - Rejects newly added Gitlinks before it creates a candidate commit. A rejected
   self-improvement candidate keeps bounded evidence and its worktree. It cannot
-  run gates or receive a quality vector, and later candidates continue.
+  run gates or receive a quality vector, and later candidates continue. SQLite
+  rejects unknown candidate states and does not let an artifact rejection
+  become a different candidate disposition.
 - Runs verification gates without a command shell.
 - Decodes child output as UTF-8 with replacement and retains bounded text.
 - Gives Python gates the candidate `src` path and disables ambient pytest

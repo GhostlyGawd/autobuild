@@ -53,7 +53,9 @@ The controller applies these boundaries:
 - It classifies an unsafe self-improvement candidate as `artifact-rejected`.
   The candidate receives no commit, gate execution, quality vector, eligibility,
   or promotion authority. The controller preserves its worktree and continues
-  with later isolated candidates.
+  with later isolated candidates. SQLite accepts only the bounded candidate
+  status and classification vocabulary. It does not let an artifact rejection
+  become a different disposition.
 - It selects at most one self-improvement candidate and requires that candidate
   to pass all gates without baseline regression or gate mutation.
 - It verifies the deterministic quality rank and selected candidate again in

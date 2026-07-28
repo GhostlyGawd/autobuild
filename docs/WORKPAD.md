@@ -75,9 +75,9 @@
 | Bounded self-improvement | Required | normal work-item route | Live generation 1 | SPEC, architecture | Proven for one local cycle |
 | Measured self-improvement comparison | Required | baseline and candidate vectors with pass deltas | Improvement and unchanged-failure tests | README, SPEC, architecture, lifecycle contract | Promoted in `3a13e08` |
 | Ranked self-improvement experiments | Required | `config.py`, `orchestrator.py`, `state.py` | Multi-candidate tie-break and candidate-timeout lifecycle tests | README, architecture, security, lifecycle contract | Proven for fan-out, eligibility, and preservation; quality ranking is below |
-| Git change-surface quality ranking | Required | `models.py`, `gitops.py`, `orchestrator.py`, `state.py` | Git metric, tampering, unequal-quality, exact-tie, and legacy-status tests | README, architecture, security, lifecycle contract | Promoted after three-candidate dogfood; live quality ordering remains pending |
-| Promotion crash recovery | Required | immutable intent and fenced recovery in `state.py` and `orchestrator.py`; existing exact Git observations in `gitops.py` | before-Git, after-Git, post-success, divergence, stale-authority, stale-controller, and idempotent-restart tests | SPEC, README, architecture, SECURITY, lifecycle contract | Worker implementation proven; live dogfood remains pending |
-| Artifact-safe candidate eligibility | Required | typed staging rejection in `gitops.py`; candidate-local disposition in `orchestrator.py`; bounded evidence validation in `state.py` | multiple-Gitlink staging, one-unsafe-one-valid, all-unsafe, and invalid-evidence tests | SPEC, README, architecture, SECURITY, lifecycle contract | Worker implementation and focused failure injection proven; live dogfood remains pending |
+| Git change-surface quality ranking | Required | `models.py`, `gitops.py`, `orchestrator.py`, `state.py` | Git metric, tampering, unequal-quality, exact-tie, and legacy-status tests | README, architecture, security, lifecycle contract | Proven by two three-candidate live runs, including the current controller |
+| Promotion crash recovery | Required | immutable intent and fenced recovery in `state.py` and `orchestrator.py`; existing exact Git observations in `gitops.py` | before-Git, after-Git, post-success, divergence, stale-authority, stale-controller, and idempotent-restart tests | SPEC, README, architecture, SECURITY, lifecycle contract | Normal-path live intent proven; injected process-death recovery remains test-only |
+| Artifact-safe candidate eligibility | Required | typed staging rejection in `gitops.py`; candidate-local disposition in `orchestrator.py`; bounded evidence validation in `state.py` | multiple-Gitlink staging, one-unsafe-one-valid, all-unsafe, and invalid-evidence tests | SPEC, README, architecture, SECURITY, lifecycle contract | Implementation promoted live; outer live artifact injection remains pending |
 | Automated controlled-English precheck | Required | `writing.py`, CLI gate | Writing precheck tests and live command | README, writing standard | Proven for limited automated scope |
 | Full STE claim requires human reviews | Required | repository policy and docs | Deterministic release labels | README, AGENTS, writing standard | Not released; human reviews unavailable |
 
@@ -773,6 +773,53 @@ Artifact-safe candidate eligibility implementation evidence recorded on
   process-exit cleanup inspected an ambient temporary-directory link. The test
   command returned success and did not change repository files.
 
+Artifact-safe candidate eligibility live promotion and primary-review evidence
+recorded on 2026-07-28:
+
+- Run `95b919c0-0f47-498d-83bb-eeb19c09200a` started three isolated candidates
+  from `57104ac50d74769fdcb35fcd272d0965fa11e14f`.
+- Candidate 1 produced `fef003d`, candidate 2 produced `0732079`, and candidate
+  3 produced `bbe3db8`. Each candidate passed all four controller gates and
+  was eligible.
+- SQLite recorded quality vectors of 511 changed lines across 11 files for
+  candidate 1, 500 changed lines across 11 files for candidate 2, and 468
+  changed lines across 11 files for candidate 3. The controller ranked the
+  candidates as 3, 2, 1 and promoted candidate 3.
+- Before Git changed the base, SQLite stored the run, expected base, candidate
+  commit, winner worktree, full SPEC digest, and work-item digest in one
+  immutable promotion-intent row. The promotion decision names the same
+  candidate and commit.
+- The controller cleaned the promoted winner worktree after success. It
+  preserved the candidate 1 and candidate 2 worktrees. The promoted checkpoint
+  `bbe3db8` was pushed to `origin/agent/bootstrap-autobuild`.
+- This live run proves current-controller gate replay, Git change-surface
+  ranking, normal-path intent creation, one-winner promotion, winner cleanup,
+  and non-winner preservation. The outer controller candidates were safe. The
+  mixed and all-unsafe failure-injection tests remain the evidence for actual
+  artifact rejection.
+- Primary review found that SQLite enforced the artifact-rejection shape only
+  when the classification already equaled `artifact-rejected`. A caller could
+  supply status `rejected` with another classification or rewrite a stored
+  rejection as another candidate state.
+- Primary review now restricts candidate status and classification values,
+  requires the exact paired artifact-rejection shape from either direction,
+  and prevents a stored artifact rejection from becoming another disposition.
+- Documentation drift was behavioral, state-integrity, security, architecture,
+  lifecycle, and dated-evidence drift. README, SECURITY, architecture,
+  lifecycle JSON, and this workpad were aligned in the same change.
+- Reviewed and unaffected: `SPEC.json` already defines the required outcome and
+  acceptance criteria. Configuration, setup commands, agent adapters, versions,
+  licensing, provenance, releases, and external integrations do not change.
+- The focused state, Git, and orchestrator suite passed all 8 tests.
+- The complete isolated suite passed all 68 tests. Ruff and
+  `git diff --check` passed.
+- Repository validation passed configuration, SPEC, executable, and Draft
+  2020-12 lifecycle-contract checks with `--skip-git-clean`.
+- The writing precheck found no automated findings and retained
+  `NOT RELEASED — COMPLIANCE CHECK INCOMPLETE`.
+- Codeweb refresh and diff retained 207 symbols and 257 edges. It found no new
+  cycle, confirmed duplication, orphan, or lost caller.
+
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
 autoloading. A fresh project virtual environment remains the supported setup.
@@ -802,11 +849,10 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: artifact-safe candidate eligibility is implemented and validated in the
-bounded worker worktree. The changes remain uncommitted for controller
-evaluation.
+Status: artifact-safe candidate eligibility is promoted and live-ranked. The
+primary state-integrity repair passed the complete local validation set and is
+ready for its checkpoint commit.
 
-Next owner and action: the controller can evaluate and promote this candidate.
-A later bounded self-improvement run must still provide live artifact-rejection
-dogfood evidence. A later controlled failure-injection run must also provide
-live restart-recovery evidence.
+Next owner and action: after the primary repair is pushed, a later bounded
+self-improvement run can inject an actual unsafe outer candidate. A later
+controlled process-death run can provide live restart-recovery evidence.

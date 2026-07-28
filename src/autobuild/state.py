@@ -23,6 +23,21 @@ from .models import (
 )
 from .spec import Specification
 
+_EXPERIMENT_STATUSES = frozenset({"executing", "failed", "evaluated", "rejected"})
+_EXPERIMENT_CLASSIFICATIONS = frozenset(
+    {
+        "pending",
+        "timed-out",
+        "agent-failed",
+        "mutated",
+        "regression",
+        "improvement",
+        "non-regression",
+        "no-improvement",
+        "artifact-rejected",
+    }
+)
+
 
 class StaleLeaseError(RuntimeError):
     """An active run lost desired-state, source, or lease authority."""
@@ -863,6 +878,11 @@ class StateStore:
         quality: ChangeSurface | None,
         controller_lease: ControllerLease,
     ) -> None:
+        if (
+            status not in _EXPERIMENT_STATUSES
+            or classification not in _EXPERIMENT_CLASSIFICATIONS
+        ):
+            raise ValueError("experiment candidate evidence is not bounded")
         expected_score = sum(result is True for result in gate_results.values())
         expected_all_pass = bool(gate_results) and all(
             result is True for result in gate_results.values()
@@ -884,8 +904,12 @@ class StateStore:
             raise ValueError("experiment quality requires a candidate commit")
         if status == "evaluated" and quality is None:
             raise ValueError("evaluated experiment requires a quality vector")
-        if classification == "artifact-rejected" and not (
+        is_artifact_rejection = (
+            status == "rejected" or classification == "artifact-rejected"
+        )
+        if is_artifact_rejection and not (
             status == "rejected"
+            and classification == "artifact-rejected"
             and candidate_commit is None
             and quality is None
             and bool(gate_results)
@@ -923,7 +947,7 @@ class StateStore:
                 )
             existing = connection.execute(
                 """
-                SELECT candidate_commit
+                SELECT candidate_commit, classification
                 FROM experiment_candidates
                 WHERE run_id = ? AND candidate_id = ?
                 """,
@@ -935,6 +959,12 @@ class StateStore:
                 and existing["candidate_commit"] != candidate_commit
             ):
                 raise ValueError("experiment candidate commit is immutable")
+            if (
+                existing is not None
+                and existing["classification"] == "artifact-rejected"
+                and classification != "artifact-rejected"
+            ):
+                raise ValueError("artifact-rejected candidate evidence is immutable")
             connection.execute(
                 """
                 INSERT INTO experiment_candidates(
