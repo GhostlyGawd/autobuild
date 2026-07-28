@@ -31,8 +31,7 @@
 - [x] Add semantic cleanup for successful worktrees.
 - [ ] Retry the live product reconciliation after the failed run lease expires.
 - [ ] Run the first bounded self-improvement experiment.
-- [ ] Add lease renewal, terminal cleanup reconciliation, and comparative
-  improvement metrics.
+- [ ] Add comparative improvement metrics for self-improvement work.
 
 ## Acceptance criteria
 
@@ -66,13 +65,23 @@
 | Automated controlled-English precheck | Required | `writing.py`, CLI gate | Writing precheck tests and live command | README, writing standard | Proven for limited automated scope |
 | Full STE claim requires human reviews | Required | repository policy and docs | Deterministic release labels | README, AGENTS, writing standard | Not released; human reviews unavailable |
 
+Alignment review for `bootstrap-reconciler`:
+
+- Required conflict repaired: the plan and handoff still marked implemented
+  lease renewal, cleanup, and gate isolation as pending.
+- Documentation-only drift repaired: two lifecycle proof names did not match
+  the current test functions.
+- Reviewed and unaffected: `SPEC.json` still defines the same acceptance
+  criteria. README, architecture, security, setup, and examples remain accurate
+  because this worker did not change runtime or security behavior.
+
 ## Implementation progress
 
-The first implementation slice provides a standard-library runtime and a
-Codex CLI adapter. The controller renews leases during long child processes,
-commits a candidate before evaluation, and rejects gate mutations. It cleans a
-verified successful worktree after all semantic checks pass. It preserves
-failed, stale, and manual-handoff worktrees.
+The bootstrap reconciler provides a standard-library runtime and a Codex CLI
+adapter. The controller renews leases during long child processes, commits a
+candidate before evaluation, and rejects gate mutations. It cleans a verified
+successful worktree after all semantic checks pass. It preserves failed,
+stale, and manual-handoff worktrees.
 
 The first live product run found a Windows command-resolution defect. Python
 selected a restricted app-package executable instead of the npm command shim.
@@ -113,6 +122,8 @@ Commands and outcomes:
 
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q`:
   34 tests passed.
+- Focused lifecycle and security suite:
+  27 tests passed.
 - `python -m ruff check .`: passed.
 - `PYTHONPATH=src python -m autobuild writing-check`: no automated
   findings; final status remained `NOT RELEASED — COMPLIANCE CHECK INCOMPLETE`.
@@ -151,8 +162,9 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: implementation in progress.
+Status: the `bootstrap-reconciler` implementation and its acceptance evidence
+are complete at base commit `f8cb899566810f92d0df1d95190d2838fd4f9a5a`.
 
-Next owner and action: the autonomous orchestrator must commit the deterministic
-gate environment, run generation 3 of the product dogfood item, and evaluate
-the first self-improvement candidate only after product dogfood succeeds.
+Next owner and action: the parent controller can run the configured gates and
+apply its normal fast-forward promotion policy. The live product retry and the
+first self-improvement experiment remain separate follow-up work.

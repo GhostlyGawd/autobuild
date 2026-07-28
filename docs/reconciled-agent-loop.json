@@ -157,7 +157,7 @@
       "retry_timeout": "Do not retry automatically while blocked",
       "restart": "Retain the block reason and artifacts",
       "disposal": "Preserve all evidence",
-      "proof": "test_attempt_limit_prevents_new_claim"
+      "proof": "test_attempt_limit_marks_item_blocked"
     },
     {
       "name": "superseded",
@@ -169,7 +169,7 @@
       "retry_timeout": "Do not retry absent work",
       "restart": "Retain superseded state",
       "disposal": "Preserve historical run evidence",
-      "proof": "test_sync_marks_removed_item_superseded"
+      "proof": "test_sync_marks_removed_item_superseded_and_restores_it"
     },
     {
       "name": "leased",
