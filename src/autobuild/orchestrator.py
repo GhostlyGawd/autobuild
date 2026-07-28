@@ -12,11 +12,12 @@ from .gitops import (
     commit_candidate,
     create_worktree,
     current_commit,
+    has_changes,
     is_clean,
     promote_fast_forward,
 )
 from .models import RunOutcome, RunStatus, WorkKind
-from .process import run_gate, safe_environment
+from .process import redact_text, run_gate, safe_environment
 from .spec import load_spec
 from .state import StateStore
 
@@ -58,6 +59,7 @@ class Orchestrator:
             return RunOutcome(claim.run_id, "stale", "desired state changed before dispatch")
 
         worktree = None
+        execution_state = RunStatus.LEASED
         try:
             worktree = create_worktree(
                 self.root,
@@ -71,7 +73,11 @@ class Orchestrator:
                 RunStatus.EXECUTING,
                 worktree=worktree.path,
             )
-            environment = safe_environment(self.config.policy.allowed_environment)
+            execution_state = RunStatus.EXECUTING
+            environment = safe_environment(
+                self.config.policy.allowed_environment,
+                self.config.policy.redacted_name_fragments,
+            )
             result = run_agent(
                 self.config.agent,
                 claim.work_item,
@@ -86,7 +92,10 @@ class Orchestrator:
                 {
                     "returncode": result.returncode,
                     "timed_out": result.timed_out,
-                    "summary": result.summary,
+                    "summary": redact_text(
+                        result.summary,
+                        self.config.policy.redacted_name_fragments,
+                    ),
                 },
             )
             if not result.passed:
@@ -103,7 +112,11 @@ class Orchestrator:
                     worktree.path,
                 )
 
+            candidate = commit_candidate(
+                worktree, f"autobuild: complete {claim.work_item.id}"
+            )
             self.store.transition(claim, RunStatus.EXECUTING, RunStatus.EVALUATING)
+            execution_state = RunStatus.EVALUATING
             for gate in self.config.gates:
                 gate_result = run_gate(gate, worktree.path, environment)
                 self.store.record_event(
@@ -114,8 +127,14 @@ class Orchestrator:
                         "returncode": gate_result.returncode,
                         "duration_seconds": round(gate_result.duration_seconds, 3),
                         "timed_out": gate_result.timed_out,
-                        "stdout": gate_result.stdout,
-                        "stderr": gate_result.stderr,
+                        "stdout": redact_text(
+                            gate_result.stdout,
+                            self.config.policy.redacted_name_fragments,
+                        ),
+                        "stderr": redact_text(
+                            gate_result.stderr,
+                            self.config.policy.redacted_name_fragments,
+                        ),
                     },
                 )
                 if not gate_result.passed:
@@ -132,6 +151,19 @@ class Orchestrator:
                         worktree.path,
                     )
 
+            if has_changes(worktree) or current_commit(worktree.path) != candidate:
+                self.store.transition(
+                    claim,
+                    RunStatus.EVALUATING,
+                    RunStatus.FAILED,
+                    detail="verification gates changed the candidate",
+                )
+                return RunOutcome(
+                    claim.run_id,
+                    "failed",
+                    "verification gates changed the candidate",
+                    worktree.path,
+                )
             current_spec = load_spec(self.root / "SPEC.json")
             if (
                 current_spec.digest != claim.spec_digest
@@ -150,10 +182,14 @@ class Orchestrator:
                     worktree.path,
                 )
             self.store.transition(claim, RunStatus.EVALUATING, RunStatus.PROMOTING)
-            candidate = commit_candidate(
-                worktree, f"autobuild: complete {claim.work_item.id}"
-            )
+            execution_state = RunStatus.PROMOTING
             if not self.config.auto_promote:
+                self.store.transition(
+                    claim,
+                    RunStatus.PROMOTING,
+                    RunStatus.AWAITING_PROMOTION,
+                    detail=f"verified candidate {candidate}",
+                )
                 return RunOutcome(
                     claim.run_id,
                     "awaiting-promotion",
@@ -174,10 +210,12 @@ class Orchestrator:
                 worktree.path,
             )
         except GitError as error:
-            expected = RunStatus.LEASED if worktree is None else RunStatus.EXECUTING
             with suppress(Exception):
                 self.store.transition(
-                    claim, expected, RunStatus.FAILED, detail=f"git error: {error}"
+                    claim,
+                    execution_state,
+                    RunStatus.FAILED,
+                    detail=f"git error: {error}",
                 )
             return RunOutcome(
                 claim.run_id,

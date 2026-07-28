@@ -15,7 +15,9 @@ but the project is not production-ready.
 - Reconciles desired state instead of trusting a worker process.
 - Uses lease generations to reject stale worker events.
 - Runs agents in isolated Git worktrees.
-- runs verification gates without a command shell.
+- Commits a candidate before it runs verification gates.
+- Runs verification gates without a command shell.
+- Rejects a candidate if a gate changes the committed content.
 - Revalidates the SPEC and base commit before dispatch and promotion.
 - Uses the same path for product work and bounded self-improvement.
 - Treats automated controlled-English checks as evidence, not as an
@@ -46,7 +48,8 @@ autobuild run --once
 
 The default configuration uses `codex exec` with workspace-write sandboxing.
 Review `.autobuild/config.toml` before the first live run. A successful agent
-process is not sufficient for promotion. All configured gates must pass.
+process is not sufficient for promotion. All configured gates must pass, and
+they must leave the candidate unchanged.
 
 ## Project contract
 

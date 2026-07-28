@@ -25,13 +25,19 @@ class RunStatus(StrEnum):
     EXECUTING = "executing"
     EVALUATING = "evaluating"
     PROMOTING = "promoting"
+    AWAITING_PROMOTION = "awaiting-promotion"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     STALE = "stale"
 
     @property
     def terminal(self) -> bool:
-        return self in {self.SUCCEEDED, self.FAILED, self.STALE}
+        return self in {
+            self.AWAITING_PROMOTION,
+            self.SUCCEEDED,
+            self.FAILED,
+            self.STALE,
+        }
 
 
 @dataclass(frozen=True)
@@ -95,4 +101,3 @@ class RunOutcome:
     status: str
     detail: str
     worktree: Path | None = None
-

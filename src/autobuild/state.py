@@ -104,6 +104,7 @@ class StateStore:
                         acceptance_json = excluded.acceptance_json,
                         spec_digest = excluded.spec_digest,
                         status = CASE
+                            WHEN work_items.status = 'superseded' THEN 'ready'
                             WHEN work_items.spec_digest != excluded.spec_digest
                                  AND work_items.status = 'achieved' THEN 'ready'
                             ELSE work_items.status
@@ -181,6 +182,14 @@ class StateStore:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._expire_leases(connection, now)
+            connection.execute(
+                """
+                UPDATE work_items
+                SET status = 'blocked', updated_at = ?
+                WHERE status = 'ready' AND attempt_count >= ?
+                """,
+                (now, max_attempts),
+            )
             query = """
                 SELECT * FROM work_items
                 WHERE status = 'ready' AND attempt_count < ?
@@ -304,6 +313,11 @@ class StateStore:
             if target is RunStatus.SUCCEEDED:
                 connection.execute(
                     "UPDATE work_items SET status = 'achieved', updated_at = ? WHERE id = ?",
+                    (now, claim.work_item.id),
+                )
+            elif target is RunStatus.AWAITING_PROMOTION:
+                connection.execute(
+                    "UPDATE work_items SET status = 'blocked', updated_at = ? WHERE id = ?",
                     (now, claim.work_item.id),
                 )
             elif target in {RunStatus.FAILED, RunStatus.STALE}:

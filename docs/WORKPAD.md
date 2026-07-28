@@ -20,7 +20,7 @@
 - [x] Establish the authority, lifecycle, security, and documentation contracts.
 - [x] Implement SPEC loading, durable state, fenced claims, the Codex adapter,
   gate execution, isolated worktrees, and fast-forward promotion.
-- [ ] Prove the full lifecycle and security matrix with deterministic tests.
+- [x] Prove the current lifecycle and security matrix with deterministic tests.
 - [ ] Dogfood validation and state inspection in this repository.
 - [ ] Run the first bounded self-improvement experiment.
 - [ ] Add lease renewal, terminal cleanup reconciliation, and comparative
@@ -43,24 +43,51 @@
 
 | Contract item | Normative level | Implementation | Test | Docs/example | Status |
 |---|---|---|---|---|---|
-| SPEC owns desired state | Required | `spec.py`, `orchestrator.py` | Pending | README, architecture | Implemented; test pending |
-| SQLite owns leases and events | Required | `state.py` | Pending | architecture | Implemented; test pending |
-| Generation fences stale events | Required | `state.py` | Pending | lifecycle contract | Implemented; test pending |
-| Fresh read before dispatch and promotion | Required | `orchestrator.py` | Pending | architecture | Implemented; test pending |
-| Shell-free gate execution | Required | `process.py` | Pending | SECURITY | Implemented; test pending |
-| Isolated, fast-forward-only promotion | Required | `gitops.py` | Pending | README, architecture | Implemented; test pending |
+| SPEC owns desired state | Required | `spec.py`, `orchestrator.py` | SPEC and orchestrator tests | README, architecture | Proven for current local flow |
+| SQLite owns leases and events | Required | `state.py` | State lifecycle tests | architecture | Proven for current local flow |
+| Generation fences stale events | Required | `state.py` | Stale and restart tests | lifecycle contract | Proven |
+| Fresh read before dispatch and promotion | Required | `orchestrator.py` | Git and orchestrator tests | architecture | Partly proven; dispatch race injection remains |
+| Shell-free gate execution | Required | `process.py` | Shell-injection negative | SECURITY | Proven |
+| Secret containment and evidence redaction | Required | `process.py`, `orchestrator.py` | Environment and redaction negatives | SECURITY | Proven for configured and known forms |
+| Candidate immutability after verification | Required | `orchestrator.py`, `gitops.py` | Gate-mutation negative | README, architecture | Proven |
+| Isolated, fast-forward-only promotion | Required | `gitops.py` | Git integration tests | README, architecture | Proven |
 | Bounded self-improvement | Required | normal work-item route | Pending | SPEC, architecture | Partial |
 | Full STE claim requires human reviews | Required | repository policy and docs | Text audit pending | README, AGENTS | Implemented; not released as compliant |
 
 ## Implementation progress
 
 The first implementation slice provides a standard-library runtime and a
-Codex CLI adapter. The controller preserves failed or stale worktrees. It does
-not yet renew an active lease or clean terminal worktrees.
+Codex CLI adapter. The controller commits a candidate before evaluation and
+rejects gate mutations. It preserves failed, stale, and manual-handoff
+worktrees. It does not yet renew an active lease or clean terminal worktrees.
 
 ## Validation evidence
 
-No post-implementation validation has been recorded yet.
+Evidence recorded on 2026-07-28:
+
+| Sequence | Failure injection | Expected semantic outcome | Durable evidence | Test |
+|---|---|---|---|---|
+| Claim then submit event | Stale generation | Reject event and preserve current state | SQLite run row | `test_stale_generation_cannot_transition` |
+| Expire lease then restart | Controller loss | New generation and preserved old run | SQLite run and event rows | `test_restart_expires_lease_and_uses_higher_generation` |
+| Evaluate candidate | Gate failure | Preserve candidate and base commit | Failed run and worktree | `test_gate_failure_prevents_promotion_and_preserves_worktree` |
+| Evaluate committed candidate | Gate writes a file | Reject unverified mutation | Failed run and dirty worktree | `test_gate_mutation_prevents_promotion` |
+| Promote candidate | Base moved | Refuse promotion | Git commits and raised invariant | `test_base_change_prevents_promotion` |
+| Promote candidate | Git failure | Record terminal failure | SQLite failed run | `test_git_error_in_promotion_records_terminal_failure` |
+| Configure manual promotion | Automatic promotion disabled | Stable handoff | Awaiting run and blocked item | `test_manual_promotion_policy_enters_stable_handoff` |
+| Build child environment | Secret name is allowlisted | Exclude secret | Process environment assertion | `test_safe_environment_rejects_secret_name_even_if_allowed` |
+| Record process text | Known secret forms present | Redact values | Redacted text assertion | `test_redact_text_removes_environment_and_known_token_shapes` |
+
+Commands and outcomes:
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q`:
+  21 tests passed.
+- `python -m ruff check .`: passed.
+- `PYTHONPATH=src python -m autobuild validate --skip-git-clean`: configuration,
+  SPEC, executable, and Draft 2020-12 lifecycle-contract checks passed.
+
+The environment-wide pytest plugin set caused an unbounded startup in the first
+combined run. The isolated project test run disables unrelated plugin
+autoloading. A fresh project virtual environment remains the supported setup.
 
 ## Uncertainties and assumptions
 
@@ -79,7 +106,6 @@ None for the current implementation slice.
 
 Status: implementation in progress.
 
-Next owner and action: the autonomous orchestrator must add lifecycle tests,
-run all validation commands, record dated evidence here, and then select the
-next unproved acceptance criterion.
-
+Next owner and action: the autonomous orchestrator must add active lease
+renewal, prove dispatch revalidation under injected SPEC or base movement, and
+then dogfood repository validation and state inspection.

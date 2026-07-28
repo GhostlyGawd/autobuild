@@ -9,18 +9,21 @@ flowchart LR
     D[(SQLite<br/>leases and evidence)] <--> R
     R -->|fenced claim| W[Isolated Git worktree]
     W --> A[Bounded agent process]
-    A --> E[Verification gates]
+    A --> C[Candidate commit]
+    C --> E[Verification gates]
     E -->|all pass| V[Fresh SPEC and Git read]
     V -->|unchanged| P[Fast-forward promotion]
     V -->|changed| H[Preserved stale candidate]
-    E -->|failure| F[Preserved failed candidate]
+    E -->|failure or mutation| F[Preserved failed candidate]
 ```
 
 Accessible description: The reconciler compares the SPEC, Git commit, and
 SQLite execution state. It sends a fenced claim to an isolated worktree. An
 agent changes that worktree. Verification gates evaluate the change. The
-controller reads the SPEC and Git commit again. It promotes only an unchanged,
-verified, fast-forward candidate. It preserves failed or stale candidates.
+controller commits the candidate and runs verification gates. The controller
+rejects a gate that changes the candidate. It reads the SPEC and base Git commit
+again. It promotes only an unchanged, verified, fast-forward candidate. It
+preserves failed or stale candidates.
 
 Diagram provenance: generated for `autobuild` from the repository lifecycle
 contract on 2026-07-28. The Mermaid source in this file is the authoritative
@@ -55,6 +58,10 @@ item becomes eligible for a new generation. Stale events cannot update the new
 run. Failed and stale worktrees remain available until a later, explicit
 cleanup policy has semantic evidence that they are disposable.
 
+When automatic promotion is disabled, a verified candidate enters a stable
+`awaiting-promotion` state. The work item becomes blocked, and lease expiry does
+not discard the handoff evidence.
+
 ## Current limitations
 
 - One controller must own a state database.
@@ -66,4 +73,3 @@ cleanup policy has semantic evidence that they are disposable.
 - The controller preserves worktrees but does not yet reconcile and clean
   terminal worktrees.
 - Comparative self-improvement metrics are specified but not implemented.
-

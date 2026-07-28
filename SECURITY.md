@@ -9,7 +9,12 @@ The controller applies these boundaries:
 
 - It runs configured commands with argument arrays and `shell=False`.
 - It gives child processes an allowlisted environment.
+- It denies allowlisted variables when their names match configured secret-name
+  fragments.
+- It redacts inherited secret values and common credential forms before it
+  writes agent or gate output to durable events.
 - It isolates agent edits in a Git worktree.
+- It commits the candidate before verification and rejects later gate changes.
 - It revalidates the SPEC digest and base commit before dispatch and promotion.
 - It rejects events that have an expired or stale lease generation.
 - It uses fast-forward-only promotion.
@@ -19,6 +24,9 @@ These controls do not create a complete security sandbox. The configured agent,
 operating system, Git hooks, test commands, package managers, and build tools can
 execute code. Use an operating-system sandbox or disposable machine for
 untrusted repositories.
+
+Output redaction is a defense-in-depth control. It cannot identify every secret
+format or sensitive value. A process must not print secrets.
 
 ## Secrets and privacy
 
@@ -36,4 +44,3 @@ available, contact the repository owner through a private channel.
 
 Include the affected commit, impact, reproduction steps, and suggested
 containment. Do not include working credentials or private data.
-

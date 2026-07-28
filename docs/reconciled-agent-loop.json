@@ -31,6 +31,7 @@
     {"name": "executing", "meaning": "The agent can change only the isolated worktree"},
     {"name": "evaluating", "meaning": "Configured gates evaluate the candidate"},
     {"name": "promoting", "meaning": "Fresh reads passed and local promotion is in progress"},
+    {"name": "awaiting-promotion", "meaning": "A verified candidate is in a stable manual-promotion handoff"},
     {"name": "succeeded", "meaning": "The verified candidate reached the base repository"},
     {"name": "failed", "meaning": "The attempt ended without semantic success"},
     {"name": "stale", "meaning": "Authority expired or observed desired state changed"}
@@ -90,7 +91,7 @@
   "preservation_cleanup": [
     {
       "semantic_condition": "The run is executing, evaluating, promoting, failed, or stale",
-      "artifact_action": "Preserve the worktree and result summary",
+      "artifact_action": "Preserve the worktree, candidate commit, and result summary",
       "revalidation": "Read the durable run state before any future cleanup"
     },
     {
@@ -105,7 +106,7 @@
     }
   ],
   "human_handoff": {
-    "entry": "Enter handoff only when policy blocks automatic progress, repeated attempts reach the limit, or an external authority decision is required",
+    "entry": "Enter handoff when automatic promotion is disabled, policy blocks progress, repeated attempts reach the limit, or an external authority decision is required",
     "stability": "Keep the SPEC, run record, events, candidate worktree, base commit, and failed gate evidence unchanged",
     "resumption": "Change the authoritative SPEC or policy, then run a new reconciliation cycle that creates a new lease generation"
   },
@@ -231,6 +232,18 @@
       "proof": "test_success_marks_item_achieved"
     },
     {
+      "name": "awaiting-promotion",
+      "classification": "execution",
+      "owner": "SQLite state store after all gates pass under manual-promotion policy",
+      "entry": "The candidate is committed, all gates pass without mutation, fresh reads match, and automatic promotion is disabled",
+      "exit": "Terminal handoff state until an authorized future resumption command creates a new transition",
+      "revalidation": "Confirm candidate commit, base commit, SPEC digest, and blocked work item before resumption",
+      "retry_timeout": "Do not expire or retry automatically",
+      "restart": "Retain the candidate, blocked item, and handoff detail",
+      "disposal": "Preserve all artifacts",
+      "proof": "test_manual_promotion_policy_enters_stable_handoff"
+    },
+    {
       "name": "failed",
       "classification": "execution",
       "owner": "SQLite state store",
@@ -290,7 +303,13 @@
       "failure_injection": "Controller process loss",
       "expected_semantic_outcome": "Evidence remains and late events from the old generation fail",
       "durable_evidence": "Two run rows, increasing generation, and preserved events"
+    },
+    {
+      "sequence": "commit a candidate, pass all gates, disable automatic promotion",
+      "transition": "promoting to awaiting-promotion",
+      "failure_injection": "Policy denies automatic promotion",
+      "expected_semantic_outcome": "The verified candidate and evidence remain stable without lease expiry",
+      "durable_evidence": "Awaiting-promotion run, blocked item, and preserved worktree"
     }
   ]
 }
-
