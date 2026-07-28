@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "objective": "Build and dogfood a safe, resumable, recursively self-improving harness for autonomous engineering.",
+  "writing_policy": {
+    "mode": "controlled-technical-english",
+    "asd_ste100_release_claim": "human-review-required"
+  },
+  "work_items": [
+    {
+      "id": "bootstrap-reconciler",
+      "kind": "product",
+      "priority": 100,
+      "objective": "Implement the local reconciled control loop with durable state, fenced leases, isolated worktrees, verification gates, and fast-forward promotion.",
+      "acceptance": [
+        "A stale lease generation cannot change current run state.",
+        "Dispatch stops if the SPEC revision or base commit changed.",
+        "Promotion stops if a gate fails or the base commit changed.",
+        "Restart recovery preserves nonterminal evidence.",
+        "Lifecycle and security-negative tests pass."
+      ]
+    },
+    {
+      "id": "recursive-improvement-cycle",
+      "kind": "self-improvement",
+      "priority": 50,
+      "objective": "Use autobuild to propose, evaluate, and promote one measurable improvement to autobuild itself.",
+      "acceptance": [
+        "The candidate runs in an isolated worktree.",
+        "The candidate passes all baseline gates.",
+        "The evaluation records a measurable non-regression or improvement.",
+        "Promotion is fast-forward only and leaves durable evidence."
+      ]
+    }
+  ]
+}
+

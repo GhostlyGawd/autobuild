@@ -1,0 +1,32 @@
+schema_version = 1
+state_path = ".autobuild/state.db"
+worktree_root = ".autobuild/worktrees"
+result_root = ".autobuild/results"
+lease_seconds = 900
+max_attempts = 3
+auto_promote = true
+
+[agent]
+kind = "codex"
+command = ["codex", "exec", "--ephemeral", "--sandbox", "workspace-write"]
+timeout_seconds = 3600
+
+[policy]
+allowed_environment = ["CI", "NO_COLOR", "PYTHONIOENCODING", "SYSTEMROOT", "TEMP", "TMP", "PATH", "PATHEXT", "WINDIR"]
+redacted_name_fragments = ["TOKEN", "SECRET", "PASSWORD", "KEY", "CREDENTIAL"]
+
+[[gates]]
+name = "tests"
+command = ["python", "-m", "pytest", "-q"]
+timeout_seconds = 600
+
+[[gates]]
+name = "lint"
+command = ["python", "-m", "ruff", "check", "."]
+timeout_seconds = 300
+
+[[gates]]
+name = "contract"
+command = ["python", "-m", "autobuild", "validate", "--skip-git-clean"]
+timeout_seconds = 300
+

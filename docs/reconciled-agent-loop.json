@@ -1,0 +1,296 @@
+{
+  "external_truth": {
+    "system": "The observed SPEC.json revision and Git base commit",
+    "desired_outcome": "Each enabled work item reaches verified Git state without giving authority to a fallible worker",
+    "observation": "Read and hash SPEC.json, read the current Git commit, and read SQLite execution state before each comparison"
+  },
+  "normalized_work": {
+    "identity_fields": [
+      "work item id",
+      "SPEC digest",
+      "base commit"
+    ],
+    "scheduling_fields": [
+      "kind",
+      "priority",
+      "status",
+      "attempt count",
+      "lease generation",
+      "lease expiration"
+    ]
+  },
+  "domain_states": [
+    {"name": "ready", "meaning": "The desired item is eligible for a bounded attempt"},
+    {"name": "active", "meaning": "One current fenced run owns the item"},
+    {"name": "achieved", "meaning": "A verified candidate was promoted for the observed SPEC revision"},
+    {"name": "blocked", "meaning": "Policy or repeated failure prevents automatic progress"},
+    {"name": "superseded", "meaning": "The current SPEC no longer requests the item"}
+  ],
+  "execution_states": [
+    {"name": "leased", "meaning": "The controller created a fenced claim"},
+    {"name": "executing", "meaning": "The agent can change only the isolated worktree"},
+    {"name": "evaluating", "meaning": "Configured gates evaluate the candidate"},
+    {"name": "promoting", "meaning": "Fresh reads passed and local promotion is in progress"},
+    {"name": "succeeded", "meaning": "The verified candidate reached the base repository"},
+    {"name": "failed", "meaning": "The attempt ended without semantic success"},
+    {"name": "stale", "meaning": "Authority expired or observed desired state changed"}
+  ],
+  "ownership_failure_boundaries": [
+    {
+      "resource": "Desired work",
+      "owner": "SPEC.json at its observed SHA-256 digest",
+      "failure_domain": "A worker can read but cannot redefine the requested outcome",
+      "authority_loss_behavior": "Stop dispatch or promotion and mark the run stale"
+    },
+    {
+      "resource": "Execution lease and evidence",
+      "owner": "SQLite state store",
+      "failure_domain": "A process exit or worker message cannot directly set semantic success",
+      "authority_loss_behavior": "Reject the event unless the run id, generation, state, and lease are current"
+    },
+    {
+      "resource": "Source state and promotion",
+      "owner": "Git base repository and reconciler",
+      "failure_domain": "The agent owns edits only in its worktree",
+      "authority_loss_behavior": "Preserve the candidate and refuse non-fast-forward promotion"
+    }
+  ],
+  "reconciliation": {
+    "observation": "Load the current SPEC, Git commit, work items, runs, leases, and event history",
+    "comparison": "Find an eligible desired item that has no current owner and remains below its attempt limit",
+    "action": "Create a generation-fenced run, isolate a worktree, execute the agent, evaluate gates, revalidate, and promote",
+    "repeat_condition": "Repeat while eligible work exists; re-observe after each state change, restart, timeout, or external change"
+  },
+  "dispatch_revalidation": {
+    "boundary": "Immediately before worktree creation and agent dispatch",
+    "fresh_read": "Read the SPEC digest and base Git commit again and compare both with the claim",
+    "deny_conditions": [
+      "The SPEC digest changed",
+      "The base commit changed",
+      "The lease expired",
+      "The run generation is not current",
+      "The base repository has uncommitted changes"
+    ]
+  },
+  "retries_timeouts": {
+    "retry_policy": "A failed or stale item returns to ready until its configured attempt limit is reached",
+    "backoff": "The current local controller retries on a later explicit reconciliation cycle; time-based exponential backoff is not implemented",
+    "attempt_limit": 3,
+    "timeouts": [
+      "The agent process has a configured wall-clock timeout",
+      "Each verification gate has a configured wall-clock timeout",
+      "The run lease has a configured wall-clock expiration"
+    ]
+  },
+  "restart_stale_events": {
+    "restart_behavior": "Initialize the schema, expire old nonterminal leases, preserve their artifacts, and create a new generation only on a later claim",
+    "fencing_token": "The pair of run id and monotonically increasing per-item generation, checked with lease expiration and expected state",
+    "stale_event_disposition": "Reject the state change and retain the prior durable event history"
+  },
+  "preservation_cleanup": [
+    {
+      "semantic_condition": "The run is executing, evaluating, promoting, failed, or stale",
+      "artifact_action": "Preserve the worktree and result summary",
+      "revalidation": "Read the durable run state before any future cleanup"
+    },
+    {
+      "semantic_condition": "The run succeeded and the promoted commit is reachable from the base branch",
+      "artifact_action": "The worktree is eligible for a future exact-path cleanup policy",
+      "revalidation": "Confirm terminal state, reachability, no active process, and exact path before cleanup"
+    },
+    {
+      "semantic_condition": "Artifact ownership or semantic disposition is uncertain",
+      "artifact_action": "Preserve the artifact",
+      "revalidation": "Require new authoritative evidence before changing disposition"
+    }
+  ],
+  "human_handoff": {
+    "entry": "Enter handoff only when policy blocks automatic progress, repeated attempts reach the limit, or an external authority decision is required",
+    "stability": "Keep the SPEC, run record, events, candidate worktree, base commit, and failed gate evidence unchanged",
+    "resumption": "Change the authoritative SPEC or policy, then run a new reconciliation cycle that creates a new lease generation"
+  },
+  "states": [
+    {
+      "name": "ready",
+      "classification": "domain",
+      "owner": "SQLite projection of the current SPEC",
+      "entry": "A current SPEC item is new, changed after achievement, or returned from a failed or stale attempt",
+      "exit": "A current generation claims the item, the SPEC removes it, or the attempt limit blocks it",
+      "revalidation": "Re-read the item, attempt count, SPEC digest, and absence of a current lease during the claim transaction",
+      "retry_timeout": "Remain ready until a later cycle; do not exceed the attempt limit",
+      "restart": "Remain eligible after controller restart",
+      "disposal": "Preserve the item and its prior evidence",
+      "proof": "test_claim_is_atomic_and_orders_ready_items"
+    },
+    {
+      "name": "active",
+      "classification": "domain",
+      "owner": "SQLite state store",
+      "entry": "A claim transaction creates a leased run",
+      "exit": "The current run succeeds, fails, becomes stale, or policy blocks it",
+      "revalidation": "Check current run id, generation, expected state, and lease time for each event",
+      "retry_timeout": "Expire the lease and return the item to ready",
+      "restart": "Recover from the durable lease and run record",
+      "disposal": "Preserve all run artifacts while active",
+      "proof": "test_stale_generation_cannot_transition"
+    },
+    {
+      "name": "achieved",
+      "classification": "domain",
+      "owner": "SQLite projection after Git promotion",
+      "entry": "A promoting run records a successful fast-forward commit",
+      "exit": "The SPEC revision changes the item",
+      "revalidation": "Confirm promoted commit and current item SPEC digest",
+      "retry_timeout": "No retry while the item remains achieved for the same SPEC revision",
+      "restart": "Retain achieved state",
+      "disposal": "Preserve compact evidence; terminal worktree becomes cleanup-eligible",
+      "proof": "test_success_marks_item_achieved"
+    },
+    {
+      "name": "blocked",
+      "classification": "domain",
+      "owner": "Policy-aware reconciler",
+      "entry": "The attempt limit or an authority boundary prevents an automatic action",
+      "exit": "An authoritative SPEC or policy revision supplies a safe resumption route",
+      "revalidation": "Read the policy, attempt count, and unresolved evidence",
+      "retry_timeout": "Do not retry automatically while blocked",
+      "restart": "Retain the block reason and artifacts",
+      "disposal": "Preserve all evidence",
+      "proof": "test_attempt_limit_prevents_new_claim"
+    },
+    {
+      "name": "superseded",
+      "classification": "domain",
+      "owner": "Current SPEC projection",
+      "entry": "A prior nonterminal item is absent from the current SPEC",
+      "exit": "A later SPEC adds the id again",
+      "revalidation": "Compare all stored ids with the current parsed SPEC",
+      "retry_timeout": "Do not retry absent work",
+      "restart": "Retain superseded state",
+      "disposal": "Preserve historical run evidence",
+      "proof": "test_sync_marks_removed_item_superseded"
+    },
+    {
+      "name": "leased",
+      "classification": "execution",
+      "owner": "Claim transaction in SQLite",
+      "entry": "An eligible ready item is selected under an immediate transaction",
+      "exit": "Fresh reads allow execution, or changed state makes the claim stale",
+      "revalidation": "Compare SPEC digest, base commit, generation, and lease before dispatch",
+      "retry_timeout": "Lease expiration makes the run stale",
+      "restart": "Recover or expire the durable lease",
+      "disposal": "Preserve the claim event",
+      "proof": "test_dispatch_stops_after_spec_change"
+    },
+    {
+      "name": "executing",
+      "classification": "execution",
+      "owner": "Reconciler with a bounded agent child process",
+      "entry": "Worktree creation succeeds and the current lease transitions from leased",
+      "exit": "Agent failure goes to failed; agent success goes to evaluating",
+      "revalidation": "Validate the fenced transition before and after the child process",
+      "retry_timeout": "Agent wall-clock timeout fails the run",
+      "restart": "An expired lease makes the run stale; preserve the worktree",
+      "disposal": "Preserve the worktree and bounded result summary",
+      "proof": "test_agent_timeout_preserves_failed_candidate"
+    },
+    {
+      "name": "evaluating",
+      "classification": "execution",
+      "owner": "Reconciler and configured gate runner",
+      "entry": "The agent exits successfully under the current lease",
+      "exit": "Any failed gate fails the run; all passed gates continue to fresh revalidation",
+      "revalidation": "Validate the lease for each recorded gate result",
+      "retry_timeout": "Each gate timeout fails the run",
+      "restart": "An expired lease makes the run stale; preserve results",
+      "disposal": "Preserve gate output in bounded event evidence",
+      "proof": "test_gate_failure_prevents_promotion"
+    },
+    {
+      "name": "promoting",
+      "classification": "execution",
+      "owner": "Reconciler",
+      "entry": "All gates pass and fresh SPEC and base-commit reads match the claim",
+      "exit": "Fast-forward success reaches succeeded; Git invariant failure reaches failed",
+      "revalidation": "Read the base commit immediately before fast-forward merge",
+      "retry_timeout": "Do not retry a promotion after base movement without a new generation",
+      "restart": "Re-observe Git reachability and durable state before any action",
+      "disposal": "Preserve candidate and promotion evidence",
+      "proof": "test_base_change_prevents_promotion"
+    },
+    {
+      "name": "succeeded",
+      "classification": "execution",
+      "owner": "SQLite state store after observed Git success",
+      "entry": "Fast-forward promotion returns the promoted commit",
+      "exit": "Terminal",
+      "revalidation": "Confirm the promoted commit is reachable before later cleanup",
+      "retry_timeout": "No retry",
+      "restart": "Retain terminal state",
+      "disposal": "Retain compact evidence; candidate is cleanup-eligible after checks",
+      "proof": "test_success_marks_item_achieved"
+    },
+    {
+      "name": "failed",
+      "classification": "execution",
+      "owner": "SQLite state store",
+      "entry": "Agent, gate, Git, or policy execution fails under the current lease",
+      "exit": "Terminal run; the item can receive a new generation if attempts remain",
+      "revalidation": "Record failure only for the current generation and expected state",
+      "retry_timeout": "A later cycle can retry within the attempt limit",
+      "restart": "Retain terminal state and artifacts",
+      "disposal": "Preserve the candidate until an explicit semantic cleanup decision",
+      "proof": "test_gate_failure_prevents_promotion"
+    },
+    {
+      "name": "stale",
+      "classification": "execution",
+      "owner": "SQLite state store after authority loss",
+      "entry": "The lease expires or fresh desired-state observation differs from the claim",
+      "exit": "Terminal run; a later claim uses a higher generation",
+      "revalidation": "Compare run id, generation, expected state, lease, SPEC digest, and base commit",
+      "retry_timeout": "A later cycle can retry within the attempt limit",
+      "restart": "Retain stale state and reject late events",
+      "disposal": "Preserve candidate and event history",
+      "proof": "test_stale_generation_cannot_transition"
+    }
+  ],
+  "lifecycle_tests": [
+    {
+      "sequence": "sync SPEC, claim item, attempt transition with a different generation",
+      "transition": "ready to active; leased event rejection",
+      "failure_injection": "Use a stale generation",
+      "expected_semantic_outcome": "The current run remains unchanged and the stale event is rejected",
+      "durable_evidence": "SQLite run row and test assertion"
+    },
+    {
+      "sequence": "claim item, change SPEC, revalidate before worktree creation",
+      "transition": "leased to stale",
+      "failure_injection": "Change the SPEC digest after claim",
+      "expected_semantic_outcome": "No agent dispatch occurs",
+      "durable_evidence": "Stale run detail and absence of an executing transition"
+    },
+    {
+      "sequence": "execute agent, run a failing gate, inspect base branch",
+      "transition": "evaluating to failed",
+      "failure_injection": "Return a nonzero gate exit",
+      "expected_semantic_outcome": "The base commit does not change and the candidate remains preserved",
+      "durable_evidence": "Gate event, failed run, candidate worktree, and unchanged Git commit"
+    },
+    {
+      "sequence": "pass gates, move base commit, attempt promotion",
+      "transition": "evaluating to stale or promoting to failed",
+      "failure_injection": "Advance the base after the claim",
+      "expected_semantic_outcome": "Fast-forward promotion is refused",
+      "durable_evidence": "Run detail and unchanged candidate reachability"
+    },
+    {
+      "sequence": "expire a nonterminal lease, restart the store, claim again",
+      "transition": "executing to stale; ready to active with a higher generation",
+      "failure_injection": "Controller process loss",
+      "expected_semantic_outcome": "Evidence remains and late events from the old generation fail",
+      "durable_evidence": "Two run rows, increasing generation, and preserved events"
+    }
+  ]
+}
+

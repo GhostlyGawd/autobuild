@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/GhostlyGawd/autobuild/docs/schemas/reconciled-agent-loop.schema.json",
+  "title": "Provider-neutral reconciled agent loop",
+  "description": "Complete lifecycle evidence for a fallible, stateful, non-authoritative worker.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "external_truth",
+    "normalized_work",
+    "domain_states",
+    "execution_states",
+    "ownership_failure_boundaries",
+    "reconciliation",
+    "dispatch_revalidation",
+    "retries_timeouts",
+    "restart_stale_events",
+    "preservation_cleanup",
+    "human_handoff",
+    "states",
+    "lifecycle_tests"
+  ],
+  "properties": {
+    "external_truth": {"$ref": "#/$defs/externalTruth"},
+    "normalized_work": {"$ref": "#/$defs/normalizedWork"},
+    "domain_states": {"$ref": "#/$defs/stateClasses"},
+    "execution_states": {"$ref": "#/$defs/stateClasses"},
+    "ownership_failure_boundaries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/ownershipBoundary"}
+    },
+    "reconciliation": {"$ref": "#/$defs/reconciliation"},
+    "dispatch_revalidation": {"$ref": "#/$defs/dispatchRevalidation"},
+    "retries_timeouts": {"$ref": "#/$defs/retriesTimeouts"},
+    "restart_stale_events": {"$ref": "#/$defs/restartStaleEvents"},
+    "preservation_cleanup": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/preservationRule"}
+    },
+    "human_handoff": {"$ref": "#/$defs/humanHandoff"},
+    "states": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/stateLifecycle"}
+    },
+    "lifecycle_tests": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/lifecycleTest"}
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {"type": "string", "minLength": 1},
+    "nonEmptyStringArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/nonEmptyString"}
+    },
+    "externalTruth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["system", "desired_outcome", "observation"],
+      "properties": {
+        "system": {"$ref": "#/$defs/nonEmptyString"},
+        "desired_outcome": {"$ref": "#/$defs/nonEmptyString"},
+        "observation": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "normalizedWork": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity_fields", "scheduling_fields"],
+      "properties": {
+        "identity_fields": {"$ref": "#/$defs/nonEmptyStringArray"},
+        "scheduling_fields": {"$ref": "#/$defs/nonEmptyStringArray"}
+      }
+    },
+    "stateClasses": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "meaning"],
+        "properties": {
+          "name": {"$ref": "#/$defs/nonEmptyString"},
+          "meaning": {"$ref": "#/$defs/nonEmptyString"}
+        }
+      }
+    },
+    "ownershipBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource", "owner", "failure_domain", "authority_loss_behavior"],
+      "properties": {
+        "resource": {"$ref": "#/$defs/nonEmptyString"},
+        "owner": {"$ref": "#/$defs/nonEmptyString"},
+        "failure_domain": {"$ref": "#/$defs/nonEmptyString"},
+        "authority_loss_behavior": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "reconciliation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observation", "comparison", "action", "repeat_condition"],
+      "properties": {
+        "observation": {"$ref": "#/$defs/nonEmptyString"},
+        "comparison": {"$ref": "#/$defs/nonEmptyString"},
+        "action": {"$ref": "#/$defs/nonEmptyString"},
+        "repeat_condition": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "dispatchRevalidation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["boundary", "fresh_read", "deny_conditions"],
+      "properties": {
+        "boundary": {"$ref": "#/$defs/nonEmptyString"},
+        "fresh_read": {"$ref": "#/$defs/nonEmptyString"},
+        "deny_conditions": {"$ref": "#/$defs/nonEmptyStringArray"}
+      }
+    },
+    "retriesTimeouts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["retry_policy", "backoff", "attempt_limit", "timeouts"],
+      "properties": {
+        "retry_policy": {"$ref": "#/$defs/nonEmptyString"},
+        "backoff": {"$ref": "#/$defs/nonEmptyString"},
+        "attempt_limit": {"type": "integer", "minimum": 0},
+        "timeouts": {"$ref": "#/$defs/nonEmptyStringArray"}
+      }
+    },
+    "restartStaleEvents": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["restart_behavior", "fencing_token", "stale_event_disposition"],
+      "properties": {
+        "restart_behavior": {"$ref": "#/$defs/nonEmptyString"},
+        "fencing_token": {"$ref": "#/$defs/nonEmptyString"},
+        "stale_event_disposition": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "preservationRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["semantic_condition", "artifact_action", "revalidation"],
+      "properties": {
+        "semantic_condition": {"$ref": "#/$defs/nonEmptyString"},
+        "artifact_action": {"$ref": "#/$defs/nonEmptyString"},
+        "revalidation": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "humanHandoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entry", "stability", "resumption"],
+      "properties": {
+        "entry": {"$ref": "#/$defs/nonEmptyString"},
+        "stability": {"$ref": "#/$defs/nonEmptyString"},
+        "resumption": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "stateLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "classification",
+        "owner",
+        "entry",
+        "exit",
+        "revalidation",
+        "retry_timeout",
+        "restart",
+        "disposal",
+        "proof"
+      ],
+      "properties": {
+        "name": {"$ref": "#/$defs/nonEmptyString"},
+        "classification": {"enum": ["domain", "execution"]},
+        "owner": {"$ref": "#/$defs/nonEmptyString"},
+        "entry": {"$ref": "#/$defs/nonEmptyString"},
+        "exit": {"$ref": "#/$defs/nonEmptyString"},
+        "revalidation": {"$ref": "#/$defs/nonEmptyString"},
+        "retry_timeout": {"$ref": "#/$defs/nonEmptyString"},
+        "restart": {"$ref": "#/$defs/nonEmptyString"},
+        "disposal": {"$ref": "#/$defs/nonEmptyString"},
+        "proof": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "lifecycleTest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence",
+        "transition",
+        "failure_injection",
+        "expected_semantic_outcome",
+        "durable_evidence"
+      ],
+      "properties": {
+        "sequence": {"$ref": "#/$defs/nonEmptyString"},
+        "transition": {"$ref": "#/$defs/nonEmptyString"},
+        "failure_injection": {"$ref": "#/$defs/nonEmptyString"},
+        "expected_semantic_outcome": {"$ref": "#/$defs/nonEmptyString"},
+        "durable_evidence": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    }
+  }
+}
+
