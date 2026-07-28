@@ -29,7 +29,7 @@
 - [x] Fix deterministic source-checkout imports for isolated gates.
 - [x] Add the automated controlled-English precheck and release boundary.
 - [x] Add semantic cleanup for successful worktrees.
-- [ ] Retry the live product reconciliation after the failed run lease expires.
+- [x] Retry the live product reconciliation after the failed run lease expires.
 - [ ] Run the first bounded self-improvement experiment.
 - [ ] Add comparative improvement metrics for self-improvement work.
 
@@ -137,6 +137,9 @@ Commands and outcomes:
   returned `codex-cli 0.145.0`.
 - Full configured-gate replay with the controller-created gate environment:
   tests, lint, repository validation, and writing precheck passed.
+- Live generation 3: all controller gates passed, commit `4263497` was promoted,
+  the product item became achieved, and only the successful worktree was
+  cleaned.
 
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
@@ -162,9 +165,9 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: the `bootstrap-reconciler` implementation and its acceptance evidence
-are complete at base commit `f8cb899566810f92d0df1d95190d2838fd4f9a5a`.
+Status: live generation 3 completed the `bootstrap-reconciler` item. The
+controller promoted commit `42634971f60ba8b88781716e7d4793488fdebb4b`,
+recorded the item as achieved, and cleaned the successful worktree.
 
-Next owner and action: the parent controller can run the configured gates and
-apply its normal fast-forward promotion policy. The live product retry and the
-first self-improvement experiment remain separate follow-up work.
+Next owner and action: the autonomous orchestrator must push the promoted
+product commit, then run the first bounded self-improvement experiment.
