@@ -30,3 +30,7 @@ name = "contract"
 command = ["python", "-m", "autobuild", "validate", "--skip-git-clean"]
 timeout_seconds = 300
 
+[[gates]]
+name = "writing-precheck"
+command = ["python", "-m", "autobuild", "writing-check"]
+timeout_seconds = 300

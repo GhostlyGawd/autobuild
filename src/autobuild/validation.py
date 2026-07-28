@@ -41,12 +41,12 @@ def validate_repository(root: Path, *, skip_git_clean: bool = False) -> list[Val
         findings.append(ValidationFinding("spec", False, str(error)))
 
     for executable in ("git", config.agent.command[0]):
-        found = shutil.which(executable) is not None
+        resolved = shutil.which(executable)
         findings.append(
             ValidationFinding(
                 f"executable:{executable}",
-                found,
-                "available" if found else "not found on PATH",
+                resolved is not None,
+                f"available as {resolved}" if resolved else "not found on PATH",
             )
         )
 
@@ -96,4 +96,3 @@ def validate_repository(root: Path, *, skip_git_clean: bool = False) -> list[Val
         except Exception as error:
             findings.append(ValidationFinding("lifecycle-contract", False, str(error)))
     return findings
-

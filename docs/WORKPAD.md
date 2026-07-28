@@ -23,7 +23,11 @@
 - [x] Prove the current lifecycle and security matrix with deterministic tests.
 - [x] Add active lease renewal for agent and gate processes.
 - [x] Prove dispatch rejection after a SPEC or base-commit change.
-- [ ] Dogfood validation and state inspection in this repository.
+- [x] Dogfood validation and state inspection in this repository.
+- [x] Run a live product reconciliation and preserve its failed adapter evidence.
+- [x] Fix Windows command resolution and terminalize startup exceptions.
+- [x] Add the automated controlled-English precheck and release boundary.
+- [ ] Retry the live product reconciliation after the failed run lease expires.
 - [ ] Run the first bounded self-improvement experiment.
 - [ ] Add lease renewal, terminal cleanup reconciliation, and comparative
   improvement metrics.
@@ -55,7 +59,8 @@
 | Candidate immutability after verification | Required | `orchestrator.py`, `gitops.py` | Gate-mutation negative | README, architecture | Proven |
 | Isolated, fast-forward-only promotion | Required | `gitops.py` | Git integration tests | README, architecture | Proven |
 | Bounded self-improvement | Required | normal work-item route | Pending | SPEC, architecture | Partial |
-| Full STE claim requires human reviews | Required | repository policy and docs | Text audit pending | README, AGENTS | Implemented; not released as compliant |
+| Automated controlled-English precheck | Required | `writing.py`, CLI gate | Writing precheck tests and live command | README, writing standard | Proven for limited automated scope |
+| Full STE claim requires human reviews | Required | repository policy and docs | Deterministic release labels | README, AGENTS, writing standard | Not released; human reviews unavailable |
 
 ## Implementation progress
 
@@ -64,6 +69,11 @@ Codex CLI adapter. The controller renews leases during long child processes,
 commits a candidate before evaluation, and rejects gate mutations. It preserves
 failed, stale, and manual-handoff worktrees. It does not yet clean terminal
 worktrees.
+
+The first live product run found a Windows command-resolution defect. Python
+selected a restricted app-package executable instead of the npm command shim.
+The fixed process runner resolves the explicit executable path before launch.
+It also records future startup exceptions as terminal failures.
 
 ## Validation evidence
 
@@ -84,14 +94,24 @@ Evidence recorded on 2026-07-28:
 | Run child process | Heartbeat loses authority | Stop child promptly | Exception and elapsed-time assertion | `test_process_stops_if_heartbeat_loses_authority` |
 | Dispatch claimed item | SPEC changes after claim | Mark stale without worktree | SQLite stale run | `test_dispatch_stops_after_spec_change` |
 | Dispatch claimed item | Base commit changes after claim | Mark stale without worktree | SQLite stale run and Git commit | `test_dispatch_stops_after_base_change` |
+| Start agent process | Executable does not exist | Preserve worktree and record terminal failure | SQLite failed run | `test_agent_startup_error_records_terminal_failure` |
+| Check configured Markdown | Long sentence or paragraph | Return a finding and block the gate | CLI and finding assertions | `test_writing.py` |
 
 Commands and outcomes:
 
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q`:
-  28 tests passed.
+  32 tests passed.
 - `python -m ruff check .`: passed.
+- `PYTHONPATH=src python -m autobuild writing-check`: no automated
+  findings; final status remained `NOT RELEASED — COMPLIANCE CHECK INCOMPLETE`.
 - `PYTHONPATH=src python -m autobuild validate --skip-git-clean`: configuration,
   SPEC, executable, and Draft 2020-12 lifecycle-contract checks passed.
+- `PYTHONPATH=src python -m autobuild validate`: the first read-only dogfood
+  pass also confirmed a clean Git repository.
+- `PYTHONPATH=src python -m autobuild status --json`: the real SQLite database
+  projected both SPEC items and retained the failed live run evidence.
+- Python process-runner probe: resolved `codex` to the npm command shim and
+  returned `codex-cli 0.145.0`.
 
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
@@ -105,6 +125,9 @@ autoloading. A fresh project virtual environment remains the supported setup.
   environment. Other environments must install it or change the adapter.
 - Full ASD-STE100 release evidence is unavailable. Project text is not released
   with a compliance claim.
+- The live run from generation 1 remains in `executing` until its original
+  lease expires. The pre-fix controller ended before it could record failure.
+  The worktree and traceback remain preserved.
 
 ## Blockers
 
@@ -114,6 +137,7 @@ None for the current implementation slice.
 
 Status: implementation in progress.
 
-Next owner and action: the autonomous orchestrator must dogfood repository
-validation and state inspection, then implement the automated controlled-English
-precheck without making a full ASD-STE100 compliance claim.
+Next owner and action: the autonomous orchestrator must commit the adapter and
+writing changes, wait for generation 1 to expire, retry the live product item,
+and evaluate the first self-improvement candidate only after product dogfood
+succeeds.

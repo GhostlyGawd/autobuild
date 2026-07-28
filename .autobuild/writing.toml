@@ -1,0 +1,29 @@
+schema_version = 1
+descriptive_max_words = 25
+procedural_max_words = 20
+descriptive_max_sentences_per_paragraph = 6
+
+[[documents]]
+path = "README.md"
+content_type = "descriptive"
+
+[[documents]]
+path = "SECURITY.md"
+content_type = "descriptive"
+
+[[documents]]
+path = "AGENTS.md"
+content_type = "procedural"
+
+[[documents]]
+path = "CONTRIBUTING.md"
+content_type = "procedural"
+
+[[documents]]
+path = "docs/architecture.md"
+content_type = "descriptive"
+
+[[documents]]
+path = "docs/writing-standard.md"
+content_type = "descriptive"
+

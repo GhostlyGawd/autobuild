@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import time
 from collections.abc import Callable, Mapping
@@ -61,8 +62,12 @@ def run_process(
         raise ValueError("heartbeat_interval_seconds must be positive")
     started = time.monotonic()
     deadline = started + timeout_seconds
+    executable = shutil.which(command[0], path=environment.get("PATH"))
+    if executable is None:
+        raise FileNotFoundError(f"executable not found: {command[0]}")
+    resolved_command = (executable, *command[1:])
     process = subprocess.Popen(
-        command,
+        resolved_command,
         cwd=cwd,
         env=dict(environment),
         stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,

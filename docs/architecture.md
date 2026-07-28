@@ -20,7 +20,9 @@ flowchart LR
 Accessible description: The reconciler compares the SPEC, Git commit, and
 SQLite execution state. It sends a fenced claim to an isolated worktree. An
 agent changes that worktree. Verification gates evaluate the change. The
-controller commits the candidate and runs verification gates. The controller
+controller commits the candidate and runs verification gates.
+
+The controller
 rejects a gate that changes the candidate. It reads the SPEC and base Git commit
 again. It promotes only an unchanged, verified, fast-forward candidate. It
 preserves failed or stale candidates.
@@ -46,6 +48,10 @@ The controller renews the current lease while an agent or gate process runs.
 It stops the child process if renewal shows that the run lost authority. It
 also renews the lease at controller boundaries before it records evidence,
 commits a candidate, or changes execution state.
+
+The process runner resolves each configured executable to an explicit path
+before launch. This rule prevents Windows process creation from selecting a
+different executable suffix than the interactive shell selects.
 
 ## Self-improvement
 

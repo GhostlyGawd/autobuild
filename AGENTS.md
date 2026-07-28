@@ -36,9 +36,9 @@ Run these commands before promotion:
 ```text
 python -m pytest
 python -m ruff check .
+python -m autobuild writing-check
 python -m autobuild validate
 ```
 
 Do not put secrets, access tokens, personal paths, private prompts, or raw agent
 transcripts in committed evidence.
-

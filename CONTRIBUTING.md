@@ -9,6 +9,7 @@ the change can be tied to a current SPEC outcome.
 python -m pip install -e ".[dev]"
 python -m pytest
 python -m ruff check .
+python -m autobuild writing-check
 python -m autobuild validate
 ```
 
@@ -22,4 +23,3 @@ transcripts, or generated evidence that cannot be reproduced.
 By submitting a contribution, you confirm that you have the right to submit it.
 This repository does not currently grant a license to use or redistribute its
 contents.
-

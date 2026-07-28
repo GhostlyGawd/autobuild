@@ -13,6 +13,7 @@ from .orchestrator import Orchestrator
 from .spec import load_spec
 from .state import StateStore
 from .validation import validate_repository
+from .writing import PRECHECK_NOTICE, RELEASE_STATUS, check_configured_documents
 
 
 def _root(value: str) -> Path:
@@ -37,6 +38,10 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[kind.value for kind in WorkKind],
         help="limit selection to one work kind",
     )
+    commands.add_parser(
+        "writing-check",
+        help="run the limited controlled-English precheck",
+    )
     return parser
 
 
@@ -51,6 +56,20 @@ def main(arguments: Sequence[str] | None = None) -> int:
             marker = "PASS" if finding.passed else "FAIL"
             print(f"{marker} {finding.check}: {finding.detail}")
         return 0 if all(finding.passed for finding in findings) else 1
+
+    if args.command == "writing-check":
+        print(PRECHECK_NOTICE)
+        findings = check_configured_documents(root)
+        for finding in findings:
+            relative = finding.path.relative_to(root)
+            print(
+                f"FAIL {relative}:{finding.line} "
+                f"{finding.check}: {finding.message}"
+            )
+        if not findings:
+            print("NO AUTOMATED FINDINGS")
+        print(RELEASE_STATUS)
+        return 0 if not findings else 1
 
     config = load_config(root)
     store = StateStore(config.state_path)

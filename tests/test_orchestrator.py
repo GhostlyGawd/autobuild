@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -219,3 +220,22 @@ def test_dispatch_stops_after_base_change(
     assert outcome.status == "stale"
     assert outcome.detail == "desired state changed before dispatch"
     assert outcome.worktree is None
+
+
+def test_agent_startup_error_records_terminal_failure(git_repository: Path) -> None:
+    config = config_for(git_repository, gate_exit=0)
+    config = replace(
+        config,
+        agent=AgentConfig(
+            kind="missing",
+            command=("autobuild-executable-that-does-not-exist",),
+            timeout_seconds=10,
+        ),
+    )
+    orchestrator = Orchestrator(git_repository, config)
+
+    outcome = orchestrator.reconcile_once()
+
+    assert outcome.status == "failed"
+    assert "executable not found" in outcome.detail
+    assert orchestrator.store.status()["recent_runs"][0]["status"] == "failed"

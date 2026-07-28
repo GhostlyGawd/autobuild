@@ -82,6 +82,9 @@ replace the complete ASD-STE100 Issue 9 procedure. Full compliance requires an
 authorized standard, approved terminology, complete word and rule evidence,
 and two qualified human reviewers for the exact revision.
 
+Run the limited precheck with `autobuild writing-check`. Read
+[`docs/writing-standard.md`](docs/writing-standard.md) for its exact boundary.
+
 ## Contributing and support
 
 Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before you submit a change. Use the

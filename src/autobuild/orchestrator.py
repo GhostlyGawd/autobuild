@@ -272,3 +272,21 @@ class Orchestrator:
                 f"git error: {error}",
                 worktree.path if worktree else None,
             )
+        except Exception as error:
+            detail = redact_text(
+                f"controller error: {type(error).__name__}: {error}",
+                self.config.policy.redacted_name_fragments,
+            )
+            with suppress(Exception):
+                self.store.transition(
+                    claim,
+                    execution_state,
+                    RunStatus.FAILED,
+                    detail=detail,
+                )
+            return RunOutcome(
+                claim.run_id,
+                "failed",
+                detail,
+                worktree.path if worktree else None,
+            )
