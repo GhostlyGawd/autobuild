@@ -8,6 +8,7 @@ trusted inputs. It treats agent output and worktree content as untrusted.
 The controller applies these boundaries:
 
 - It runs configured commands with argument arrays and `shell=False`.
+- It decodes child output as UTF-8 with replacement and retains bounded text.
 - It gives child processes an allowlisted environment.
 - It gives gates a controller-created source path and isolated pytest setting.
 - It denies allowlisted variables when their names match configured secret-name

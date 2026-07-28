@@ -34,6 +34,7 @@
 - [x] Add baseline and candidate gate vectors for self-improvement work.
 - [x] Bind achieved state to canonical work-item revisions.
 - [x] Stop active children after desired-state or base-source authority loss.
+- [x] Make malformed child output nonfatal and deterministic.
 - [ ] Add a renewable controller ownership lease.
 - [ ] Add richer quality metrics and multi-candidate experiment ranking.
 
@@ -61,6 +62,7 @@
 | Fresh read before dispatch and promotion | Required | `orchestrator.py`, `gitops.py` | SPEC-change, base-change, and Git integration tests | architecture | Proven for tested local boundaries |
 | Active lease renewal and authority loss | Required | `models.py`, `process.py`, `state.py`, `orchestrator.py` | Full heartbeat, renewal, expiry, generation, and source-change tests | README, architecture, SECURITY, lifecycle contract | Proven for agent and gate callback paths |
 | Shell-free gate execution | Required | `process.py` | Shell-injection negative | SECURITY | Proven |
+| Deterministic bounded child output | Required | `process.py` | Invalid UTF-8 process-output test | README, SECURITY | Proven |
 | Deterministic Python gate environment | Required | `process.py`, `orchestrator.py` | Candidate source and pytest-isolation test | README, architecture | Proven |
 | Secret containment and evidence redaction | Required | `process.py`, `orchestrator.py` | Environment and redaction negatives | SECURITY | Proven for configured and known forms |
 | Candidate immutability after verification | Required | `orchestrator.py`, `gitops.py` | Gate-mutation negative | README, architecture | Proven |
@@ -138,6 +140,17 @@ Alignment review for `active-run-cancellation`:
   support surfaces do not change because the patch only narrows runtime
   authority.
 
+Alignment review for child-output decoding:
+
+- Live controller-ownership generation 1 exposed locale-dependent decoding.
+  A non-UTF-8 byte ended a reader thread and caused a secondary controller
+  exception.
+- The process runner now decodes UTF-8 with replacement. It also treats a
+  missing captured stream as empty before it retains bounded text.
+- README and security guidance now describe this process boundary.
+- Reviewed and unaffected: SPEC, lifecycle states, adapter authority,
+  promotion, cleanup, release, license, provenance, and visuals do not change.
+
 ## Implementation progress
 
 The bootstrap reconciler provides a standard-library runtime and a Codex CLI
@@ -174,6 +187,7 @@ Evidence recorded on 2026-07-28:
 | Configure manual promotion | Automatic promotion disabled | Stable handoff | Awaiting run and blocked item | `test_manual_promotion_policy_enters_stable_handoff` |
 | Build child environment | Secret name is allowlisted | Exclude secret | Process environment assertion | `test_safe_environment_rejects_secret_name_even_if_allowed` |
 | Record process text | Known secret forms present | Redact values | Redacted text assertion | `test_redact_text_removes_environment_and_known_token_shapes` |
+| Capture child output | Invalid UTF-8 bytes | Replace malformed bytes and return a bounded result | Process result assertion | `test_process_replaces_invalid_utf8_output` |
 | Run long agent | Agent exceeds original lease | Renew authority and succeed | SQLite lease and succeeded run | `test_long_agent_renews_short_lease` |
 | Run child process | Heartbeat loses authority | Stop child promptly | Exception and elapsed-time assertion | `test_process_stops_if_heartbeat_loses_authority` |
 | Run active agent | Full SPEC digest changes | Stop child before candidate evaluation or promotion | Stale run, bounded authority event, and preserved worktree | `test_active_agent_stops_after_spec_authority_loss` |
@@ -281,6 +295,20 @@ Active-run cancellation evidence recorded on 2026-07-28:
 - Primary Codeweb review found no new cycle, confirmed duplication, or lost
   caller after the follow-up.
 
+Controller-ownership generation 1 evidence recorded on 2026-07-28:
+
+- Codex completed an uncommitted candidate in the isolated worktree.
+- The Windows output reader failed on a locale-invalid byte in the Codex
+  stream. The controller then recorded a terminal `TypeError`.
+- The run is failed. Its worktree, candidate changes, result summary, and
+  durable SQLite evidence remain preserved.
+- The base repository stayed clean at commit `f1b6e4f`.
+- The decoding regression test emits invalid bytes on both output streams.
+- The focused process suite passed 8 tests, and the full suite passed 41 tests.
+- Ruff, repository validation, lifecycle schema validation, and the writing
+  precheck passed.
+- Codeweb found no new cycle, confirmed duplication, or lost caller.
+
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
 autoloading. A fresh project virtual environment remains the supported setup.
@@ -298,6 +326,8 @@ autoloading. A fresh project virtual environment remains the supported setup.
   remain preserved.
 - Generation 2 is terminal failed with its clean candidate and gate output
   preserved. It proves lease recovery and exposed the source-path defect.
+- Controller-ownership generation 1 is terminal failed. Its uncommitted
+  candidate remains preserved after the child-output decoding defect.
 
 ## Blockers
 
@@ -305,9 +335,9 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: the controller promoted `active-run-cancellation`. Primary review
-repaired the heartbeat renewal order and added a regression assertion.
+Status: controller-ownership generation 1 failed after its worker completed.
+The process-runner decoding defect is repaired with a regression test.
 
-Next owner and action: the autonomous orchestrator must run the complete gate
-set, commit and push the review follow-up, then reconcile
-`controller-ownership-lease`.
+Next owner and action: the autonomous orchestrator must validate, commit, and
+push the process fix, then retry `controller-ownership-lease` with a new
+generation.

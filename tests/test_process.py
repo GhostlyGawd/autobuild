@@ -102,6 +102,27 @@ def test_process_calls_heartbeat_during_long_run(tmp_path: Path) -> None:
     assert len(calls) >= 2
 
 
+def test_process_replaces_invalid_utf8_output(tmp_path: Path) -> None:
+    result = run_process(
+        (
+            sys.executable,
+            "-c",
+            (
+                "import os, sys; "
+                "os.write(sys.stdout.fileno(), b'before\\xffafter'); "
+                "os.write(sys.stderr.fileno(), b'error\\x9dtext')"
+            ),
+        ),
+        tmp_path,
+        os.environ,
+        2,
+    )
+
+    assert result.passed
+    assert result.stdout == "before\ufffdafter"
+    assert result.stderr == "error\ufffdtext"
+
+
 def test_process_stops_if_heartbeat_loses_authority(tmp_path: Path) -> None:
     class AuthorityLost(RuntimeError):
         pass

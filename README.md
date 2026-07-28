@@ -24,6 +24,7 @@ but the project is not production-ready.
 - Runs agents in isolated Git worktrees.
 - Commits a candidate before it runs verification gates.
 - Runs verification gates without a command shell.
+- Decodes child output as UTF-8 with replacement and retains bounded text.
 - Gives Python gates the candidate `src` path and disables ambient pytest
   plugin autoloading.
 - Rejects a candidate if a gate changes the committed content.

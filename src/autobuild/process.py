@@ -85,6 +85,8 @@ def run_process(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         shell=False,
     )
     pending_input = input_text
@@ -96,8 +98,8 @@ def run_process(
             return ProcessResult(
                 returncode=None,
                 duration_seconds=time.monotonic() - started,
-                stdout=stdout[-_OUTPUT_LIMIT:],
-                stderr=stderr[-_OUTPUT_LIMIT:],
+                stdout=(stdout or "")[-_OUTPUT_LIMIT:],
+                stderr=(stderr or "")[-_OUTPUT_LIMIT:],
                 timed_out=True,
             )
         try:
@@ -108,8 +110,8 @@ def run_process(
             return ProcessResult(
                 returncode=process.returncode,
                 duration_seconds=time.monotonic() - started,
-                stdout=stdout[-_OUTPUT_LIMIT:],
-                stderr=stderr[-_OUTPUT_LIMIT:],
+                stdout=(stdout or "")[-_OUTPUT_LIMIT:],
+                stderr=(stderr or "")[-_OUTPUT_LIMIT:],
             )
         except subprocess.TimeoutExpired:
             pending_input = None
