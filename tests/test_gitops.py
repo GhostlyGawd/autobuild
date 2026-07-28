@@ -84,6 +84,33 @@ def test_committed_change_surface_counts_files_and_lines(git_repository: Path) -
     assert quality.changed_lines == 4
 
 
+def test_candidate_commit_rejects_nested_git_repository(
+    git_repository: Path,
+) -> None:
+    base = current_commit(git_repository)
+    worktree = create_worktree(
+        git_repository,
+        git_repository / ".autobuild" / "worktrees",
+        "run-nested",
+        "task",
+        base,
+    )
+    nested = worktree.path / "generated-repository"
+    nested.mkdir()
+    git(nested, "init")
+    git(nested, "config", "user.name", "Autobuild Test")
+    git(nested, "config", "user.email", "autobuild@example.invalid")
+    (nested / "generated.txt").write_text("generated\n", encoding="utf-8")
+    git(nested, "add", "generated.txt")
+    git(nested, "commit", "-m", "generated repository")
+
+    with pytest.raises(GitError, match="candidate adds nested Git repositories"):
+        commit_candidate(worktree, "candidate")
+
+    assert current_commit(worktree.path) == base
+    assert nested.exists()
+
+
 def test_cleanup_preserves_dirty_successful_worktree(git_repository: Path) -> None:
     base = current_commit(git_repository)
     worktree = create_worktree(

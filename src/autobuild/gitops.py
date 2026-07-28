@@ -79,6 +79,26 @@ def has_changes(worktree: Worktree) -> bool:
 def commit_candidate(worktree: Worktree, message: str) -> str:
     if has_changes(worktree):
         _git(worktree.path, "add", "--all")
+        staged_records = _git(
+            worktree.path,
+            "diff",
+            "--cached",
+            "--raw",
+            "--no-renames",
+            "--diff-filter=A",
+            "-z",
+            "--",
+        ).stdout.split("\0")
+        added_gitlinks = [
+            staged_records[index + 1]
+            for index in range(0, len(staged_records) - 1, 2)
+            if staged_records[index].startswith(":")
+            and staged_records[index].split()[1] == "160000"
+        ]
+        if added_gitlinks:
+            _git(worktree.path, "reset", "--mixed", "HEAD", "--")
+            paths = ", ".join(added_gitlinks)
+            raise GitError(f"candidate adds nested Git repositories: {paths}")
         _git(worktree.path, "commit", "-m", message)
     return current_commit(worktree.path)
 

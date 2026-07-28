@@ -650,6 +650,55 @@ Quality-aware ranking live dogfood and primary-review evidence recorded on
 - The writing precheck found no automated findings and retained
   `NOT RELEASED — COMPLIANCE CHECK INCOMPLETE`.
 
+Promotion crash-recovery live dogfood and primary-review evidence recorded on
+2026-07-28:
+
+- Run `3147e6e0-bedb-4837-bd59-08562bb56ebd` started three isolated candidates
+  from `86ce851e511db8379b13cf4154ce35bdddeaae62`.
+- Candidate 1 produced `a5e91bc`, candidate 2 produced `68e8753`, and candidate
+  3 produced `76483cc`. Each candidate passed all four controller gates and
+  was eligible.
+- SQLite recorded immutable quality vectors of 1,139 changed lines across 10
+  files for candidate 1, 1,359 lines across 10 files for candidate 2, and 902
+  lines across 22 files for candidate 3. It ranked the candidates as 3, 1, 2
+  and promoted candidate 3.
+- Candidate 3 accidentally committed a pytest temporary tree. The tree
+  included generated nested repositories as Gitlinks. Binary and Gitlink
+  entries added few lines to the quality vector, so the line-first proxy did
+  not reject the artifact-heavy candidate.
+- Winner cleanup failed with `working trees containing submodules cannot be
+  moved or removed`. The controller preserved that worktree. It also preserved
+  both non-winning worktrees.
+- Primary review removed the promoted temporary tree. It added a candidate
+  commit guard that rejects newly added Gitlinks and a root ignore rule for
+  `pytest-of-*` temporary trees.
+- Primary review extended the post-Git crash test. The test now proves that an
+  unrelated uncommitted base change defers recovery and leaves the run in
+  `promoting` until the base is clean.
+- The running controller predated promotion-intent support. It could promote
+  the recovery implementation, but it could not record or exercise a
+  `promotion_intents` row. This run proves live quality-aware ordering. It does
+  not prove live restart recovery.
+- The promoted autonomous checkpoint `76483cc` was pushed to
+  `origin/agent/bootstrap-autobuild` before primary review.
+- Primary review removed 13 generated entries: one SQLite test database, five
+  Gitlinks, and seven temporary-directory links. The failed winner cleanup left
+  its managed worktree intact for later semantic cleanup.
+- The focused Git and post-Git recovery suite passed all 6 tests.
+- The complete isolated suite passed all 65 tests. Ruff passed.
+- Repository validation passed configuration, SPEC, executable, and Draft
+  2020-12 lifecycle-contract checks.
+- The writing precheck found no automated findings and retained
+  `NOT RELEASED — COMPLIANCE CHECK INCOMPLETE`.
+- Codeweb refresh and diff found no new cycle, confirmed duplication, orphaned
+  symbol, or lost caller.
+- Documentation drift was behavioral, security, architecture, lifecycle, and
+  dated-evidence drift. README, SECURITY, architecture, lifecycle JSON, and
+  this workpad were aligned in the same change. `SPEC.json`, configuration,
+  setup commands, agent adapters, version claims, and release boundaries were
+  reviewed and remain unaffected because the repair changes only candidate
+  staging safety and test coverage.
+
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
 autoloading. A fresh project virtual environment remains the supported setup.
@@ -679,9 +728,7 @@ None for the current implementation slice.
 
 ## Handoff
 
-Status: quality-aware ranking is promoted, reviewed, and pushed. Promotion
-crash recovery is the next approved desired-state item.
+Status: promotion crash recovery is promoted, reviewed, and pushed.
 
-Next owner and action: push this desired-state checkpoint, then run the
-three-candidate self-improvement reconciliation. Inspect both the new quality
-ordering and the crash-recovery semantics before promotion handoff.
+Next owner and action: a later controlled failure-injection run must provide
+live restart recovery evidence.

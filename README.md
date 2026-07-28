@@ -27,6 +27,7 @@ but the project is not production-ready.
   is lost.
 - Runs agents in isolated Git worktrees.
 - Commits a candidate before it runs verification gates.
+- Rejects newly added Gitlinks before it creates a candidate commit.
 - Runs verification gates without a command shell.
 - Decodes child output as UTF-8 with replacement and retains bounded text.
 - Gives Python gates the candidate `src` path and disables ambient pytest
@@ -137,6 +138,8 @@ does not run a Git command. Recovery preserves the recorded worktree.
   measure performance, maintainability, or semantic value. Git does not provide
   line counts for binary changes, so a binary path contributes one changed file
   and zero changed lines.
+- Root-level `pytest-of-*` temporary trees are ignored. The candidate commit
+  guard rejects other generated nested repositories before evaluation.
 - No license has been granted for this repository.
 
 ## Writing-standard boundary

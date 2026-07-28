@@ -916,6 +916,18 @@ def test_restart_after_crash_after_git_finalizes_once(
         git_repository,
         config_for(git_repository, gate_exit=0),
     )
+    unrelated = git_repository / "unrelated.txt"
+    unrelated.write_text("preserve\n", encoding="utf-8")
+    deferred = replacement.reconcile_once()
+
+    assert deferred.status == "deferred"
+    assert deferred.run_id is None
+    assert current_commit(git_repository) == candidate
+    state = replacement.store.status()
+    assert state["recent_runs"][0]["status"] == "promoting"
+    assert state["promotion_decisions"][0]["decision"] == "selected-for-promotion"
+
+    unrelated.unlink()
     recovered = replacement.reconcile_once()
     restarted = Orchestrator(
         git_repository,

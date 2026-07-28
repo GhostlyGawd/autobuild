@@ -127,6 +127,11 @@ An eligible candidate has a successful agent and all gates pass. No gate can
 regress from the baseline. The gates must leave the committed candidate
 unchanged.
 
+Before it creates a candidate commit, the controller inspects newly staged
+paths and rejects Gitlinks. This check keeps generated nested repositories out
+of candidate history. It also prevents those repositories from making Git
+treat the successful worktree as a worktree that contains submodules.
+
 After the gates, the controller measures each committed candidate against the
 claimed base with Git `--numstat`. The quality vector contains changed files,
 insertions, deletions, and changed lines. Changed lines equal insertions plus

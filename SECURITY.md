@@ -48,6 +48,8 @@ The controller applies these boundaries:
 - It stops the child process, makes the run stale, and records one bounded
   authority-loss cause if a heartbeat check fails.
 - It uses fast-forward-only promotion.
+- It rejects a candidate that adds a Gitlink. Generated nested repositories
+  cannot enter a candidate as submodules or block successful cleanup.
 - It selects at most one self-improvement candidate and requires that candidate
   to pass all gates without baseline regression or gate mutation.
 - It verifies the deterministic quality rank and selected candidate again in

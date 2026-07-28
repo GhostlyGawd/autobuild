@@ -96,7 +96,8 @@
       "The base commit changed",
       "The lease expired",
       "The run generation is not current",
-      "The base repository has uncommitted changes"
+      "The base repository has uncommitted changes",
+      "The candidate adds a Gitlink for a nested repository"
     ]
   },
   "retries_timeouts": {
