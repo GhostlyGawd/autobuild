@@ -699,6 +699,39 @@ Promotion crash-recovery live dogfood and primary-review evidence recorded on
   reviewed and remain unaffected because the repair changes only candidate
   staging safety and test coverage.
 
+Artifact-safe candidate eligibility alignment and plan recorded on 2026-07-28:
+
+- Present problem: live run `3147e6e0-bedb-4837-bd59-08562bb56ebd` selected an
+  artifact-heavy candidate because generated Gitlinks and a binary database
+  added few changed lines. The promoted Gitlinks then blocked winner cleanup.
+- Current workflow: `commit_candidate` now rejects a newly added Gitlink, but
+  its `GitError` leaves the per-candidate loop. One unsafe candidate therefore
+  fails the complete self-improvement run and prevents later candidates from
+  being evaluated.
+- Present consumer: the multi-candidate self-improvement controller needs
+  candidate-local rejection so one generated nested repository cannot suppress
+  an otherwise valid candidate. If this work is omitted, one unsafe first
+  candidate can waste the full bounded experiment and prevent a valid winner.
+- Rejected direction: an ignore rule alone is path-specific and cannot cover an
+  arbitrary generated nested repository.
+- Approved direction: catch the staging rejection at the candidate boundary,
+  record one bounded artifact-rejection classification, preserve its worktree,
+  and continue with the remaining candidates. Only committed candidates can
+  run gates or receive immutable quality evidence.
+- Deferred direction: binary byte size or general artifact-size weighting is a
+  future quality-policy option. It is not required to close the observed
+  Gitlink failure.
+- Acceptance tests will inject one unsafe candidate followed by one valid
+  candidate, then inject an all-unsafe run. They will verify classification,
+  missing gate and quality evidence for unsafe candidates, valid-candidate
+  promotion, no-promotion behavior, and rejected-worktree preservation.
+- Implementation surfaces: orchestrator candidate staging, bounded candidate
+  classifications, Git isolation tests, lifecycle failure injections, README,
+  SECURITY, architecture, and this workpad. Configuration, setup, adapters,
+  versions, and external integrations are unaffected.
+- The owner's standing autonomous-build direction satisfies the direction and
+  implementation approval gates for this bounded local change.
+
 The environment-wide pytest plugin set caused an unbounded startup in the first
 combined run. The isolated project test run disables unrelated plugin
 autoloading. A fresh project virtual environment remains the supported setup.
@@ -729,6 +762,8 @@ None for the current implementation slice.
 ## Handoff
 
 Status: promotion crash recovery is promoted, reviewed, and pushed.
+Artifact-safe candidate eligibility is the active desired-state item.
 
-Next owner and action: a later controlled failure-injection run must provide
-live restart recovery evidence.
+Next owner and action: push this desired-state checkpoint, then run the bounded
+three-candidate self-improvement reconciliation. A later controlled
+failure-injection run must still provide live restart recovery evidence.

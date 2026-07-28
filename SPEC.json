@@ -95,6 +95,19 @@
         "Recovery repairs the work-item achievement and self-improvement promotion decision without accepting a stale controller mutation.",
         "Failure-injection tests prove the before-Git, after-Git, post-success, divergence, stale-authority, and idempotent-restart cases."
       ]
+    },
+    {
+      "id": "artifact-safe-candidate-eligibility",
+      "kind": "self-improvement",
+      "priority": 58,
+      "objective": "Reject unsafe generated repository artifacts without aborting the remaining self-improvement candidates.",
+      "acceptance": [
+        "Candidate staging rejects each newly added Gitlink before it creates a candidate commit.",
+        "An unsafe candidate receives a bounded artifact-rejection classification and cannot run gates, receive a quality vector, rank as eligible, or reach promotion.",
+        "Rejecting one unsafe candidate does not prevent later isolated candidates from completing and winning.",
+        "The controller preserves the rejected candidate worktree and never cleans it as a successful winner.",
+        "Failure-injection tests prove one-unsafe-one-valid selection, all-unsafe no-promotion behavior, and durable candidate evidence."
+      ]
     }
   ]
 }
